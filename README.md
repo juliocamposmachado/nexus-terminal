@@ -1,5 +1,8 @@
 # NEXUS TERMINAL
 
+<img width="1361" height="717" alt="image" src="https://github.com/user-attachments/assets/6e89a5ad-5ff0-4ce0-ad13-0a3d66e9f6f7" />
+
+
 ## WHITE RAT — AI Linux Agent
 
 NEXUS TERMINAL é um agente de inteligência artificial para Linux desenvolvido em Python.
