@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>NEXUS TERMINAL — AI Linux Agent</title>
+
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background: #080808;
+            color: #e8e8e8;
+            font-family: Arial, Helvetica, sans-serif;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 800px;
+            text-align: center;
+        }
+
+        .terminal {
+            background: #101010;
+            border: 1px solid #292929;
+            border-radius: 12px;
+            padding: 45px 30px;
+            box-shadow: 0 0 40px rgba(0, 255, 120, 0.08);
+        }
+
+        .icon {
+            font-size: 55px;
+            margin-bottom: 15px;
+        }
+
+        h1 {
+            font-size: 38px;
+            letter-spacing: 3px;
+            color: #00ff88;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #aaa;
+            font-size: 18px;
+            margin-bottom: 30px;
+        }
+
+        .description {
+            color: #ccc;
+            line-height: 1.7;
+            max-width: 650px;
+            margin: 0 auto 30px;
+        }
+
+        .code {
+            background: #050505;
+            border: 1px solid #222;
+            border-radius: 8px;
+            padding: 18px;
+            text-align: left;
+            font-family: monospace;
+            color: #00ff88;
+            margin: 25px auto;
+            max-width: 600px;
+            overflow-x: auto;
+        }
+
+        .download {
+            display: inline-block;
+            margin-top: 15px;
+            padding: 15px 30px;
+            background: #00ff88;
+            color: #000;
+            text-decoration: none;
+            font-weight: bold;
+            border-radius: 7px;
+            transition: 0.2s;
+        }
+
+        .download:hover {
+            background: #00cc6d;
+            transform: translateY(-2px);
+        }
+
+        .github {
+            display: inline-block;
+            margin-left: 10px;
+            padding: 15px 30px;
+            border: 1px solid #444;
+            color: #ddd;
+            text-decoration: none;
+            border-radius: 7px;
+        }
+
+        .github:hover {
+            border-color: #00ff88;
+            color: #00ff88;
+        }
+
+        .footer {
+            margin-top: 25px;
+            color: #666;
+            font-size: 13px;
+        }
+
+        .status {
+            color: #00ff88;
+            font-family: monospace;
+            margin-bottom: 20px;
+        }
+
+        @media (max-width: 600px) {
+            h1 {
+                font-size: 28px;
+            }
+
+            .github {
+                margin-left: 0;
+                margin-top: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <div class="terminal">
+
+        <div class="icon">🐀</div>
+
+        <h1>NEXUS TERMINAL</h1>
+
+        <div class="subtitle">
+            WHITE RAT — AI Linux Agent
+        </div>
+
+        <div class="status">
+            ● SYSTEM ONLINE
+        </div>
+
+        <p class="description">
+            Um agente de inteligência artificial conectado ao
+            terminal Linux real. O NEXUS utiliza IA para analisar
+            tarefas, executar comandos e retornar resultados reais
+            do sistema operacional.
+        </p>
+
+        <div class="code">
+            AI THINKS.<br>
+            LINUX EXECUTES.<br>
+            REAL OUTPUT RETURNS.
+        </div>
+
+        <p class="description">
+            Desenvolvido em Python utilizando um terminal PTY real,
+            permitindo interação direta com o sistema Linux.
+        </p>
+
+        <!-- DOWNLOAD DIRETO -->
+        <a
+            class="download"
+            href="https://raw.githubusercontent.com/juliocamposmachado/nexus-terminal/index.html/nexus.py"
+            download="nexus.py">
+            ↓ DOWNLOAD NEXUS.PY
+        </a>
+
+        <!-- REPOSITÓRIO -->
+        <a
+            class="github"
+            href="https://github.com/juliocamposmachado/nexus-terminal"
+            target="_blank"
+            rel="noopener">
+            GitHub
+        </a>
+
+        <div class="footer">
+            © 2026 Julio Cesar Campos Machado
+        </div>
+
+    </div>
+
+</div>
+
+</body>
+</html>
