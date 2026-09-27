@@ -1,7 +1,6 @@
 # NEXUS TERMINAL
 
-<img width="1361" height="717" alt="image" src="https://github.com/user-attachments/assets/6e89a5ad-5ff0-4ce0-ad13-0a3d66e9f6f7" />
-
+<img width="1361" height="717" alt="image" src="https://github.com/user-attachments/assets/7cf21bac-c359-4990-b655-bb6c37a62be7" />
 
 ## WHITE RAT — AI Linux Agent
 
