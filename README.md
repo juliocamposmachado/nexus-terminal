@@ -4,6 +4,9 @@
 
 <img width="678" height="497" alt="image" src="https://github.com/user-attachments/assets/32b13626-8d89-42b9-826f-adc3503341ce" />
 
+<img width="1364" height="762" alt="image" src="https://github.com/user-attachments/assets/44707a97-e509-4dc7-8c6f-418496f4bbff" />
+
+
 
 ## WHITE RAT — AI Linux Agent
 
