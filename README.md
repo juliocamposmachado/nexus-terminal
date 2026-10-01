@@ -1,869 +1,434 @@
 # NEXUS TERMINAL
 
-<img width="1361" height="717" alt="image" src="https://github.com/user-attachments/assets/7cf21bac-c359-4990-b655-bb6c37a62be7" />
+**NEXUS TERMINAL** é um agente Linux escrito em Python com PTY real, integração com Gemini, execução de comandos, roteamento local e pool ilimitado de chaves com rotação sequencial.
 
-<img width="678" height="497" alt="image" src="https://github.com/user-attachments/assets/32b13626-8d89-42b9-826f-adc3503341ce" />
-
-<img width="1364" height="762" alt="image" src="https://github.com/user-attachments/assets/44707a97-e509-4dc7-8c6f-418496f4bbff" />
-
-
-
-## WHITE RAT — AI Linux Agent
-
-NEXUS TERMINAL é um agente de inteligência artificial para Linux desenvolvido em Python.
-
-O projeto conecta um modelo **Google Gemini** a um **terminal Linux real**, utilizando um PTY persistente através do `pexpect`.
-
-A IA não simula comandos.
-
-Ela analisa a solicitação do usuário, propõe comandos Linux através de `ACTION`, o NEXUS executa esses comandos no shell real e devolve o resultado verdadeiro para a IA continuar o raciocínio.
-
----
-
-## Visão geral
+Esta versão utiliza o fluxo **One-Shot**:
 
 ```text
-┌─────────────────────────────────────────────────────────┐
-│                    NEXUS TERMINAL                       │
-│                       WHITE RAT                         │
-└─────────────────────────────────────────────────────────┘
-
-                         Usuário
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │    NEXUS      │
-                    │   Terminal    │
-                    └───────┬───────┘
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │    Gemini     │
-                    │      AI       │
-                    └───────┬───────┘
-                            │
-                       ACTION
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │   Linux PTY   │
-                    │     REAL      │
-                    └───────┬───────┘
-                            │
-                       comando real
-                            │
-                            ▼
-                    ┌───────────────┐
-                    │ Resultado     │
-                    │ REAL          │
-                    └───────┬───────┘
-                            │
-                            ▼
-                         Gemini
-````
-
-O ciclo principal é:
-
-```text
-PERGUNTA
-   ↓
-GEMINI
-   ↓
-ACTION
-   ↓
-LINUX REAL
-   ↓
-RESULTADO REAL
-   ↓
-GEMINI
-   ↓
-PRÓXIMA ACTION
+Pedido do usuário
+      ↓
+Roteador local
+      ↓
+Uma chamada Gemini
+      ↓
+Resposta ou comando Linux
+      ↓
+Execução imediata no PTY real
 ```
 
----
+Não existe mais um pipeline obrigatório de interpretação, planejamento, decisão, execução e validação para cada pedido.
 
-# Principais características
+## Principais características
 
-* Terminal Linux real
-* PTY persistente
-* Shell interativo real
-* Integração com Google Gemini
-* Execução de comandos reais
-* Contexto do terminal enviado para a IA
-* Análise do resultado real
-* Execução automática opcional
-* Modo assistido
-* Confirmação para comandos potencialmente perigosos
-* Detecção de comandos destrutivos
-* Suporte a colagem no terminal
-* Tratamento de sequências ANSI
-* Suporte a UTF-8
-* Configuração persistente
-* API key protegida no arquivo de configuração
-* Interface totalmente baseada em terminal
-* Desenvolvido em Python
+- Uma chamada lógica de API por pedido técnico;
+- Próximo pedido utiliza a próxima chave do pool;
+- Failover automático somente quando a chave atual falha;
+- Quantidade ilimitada de chaves do ponto de vista da aplicação;
+- Aceita 1, 10, 100 ou mais chaves, conforme os recursos disponíveis;
+- Suporte a bloco de chaves com aspas, vírgulas e linhas vazias;
+- Remoção automática de duplicatas preservando a ordem;
+- Suporte a variáveis de ambiente `NEXUS_GEMINI_KEY_1..N`;
+- Suporte a `NEXUS_GEMINI_KEYS` para um bloco completo;
+- PTY Linux real persistente com `pexpect`;
+- Captura de saída e código de saída dos comandos;
+- Execução imediata do comando retornado pela IA;
+- Confirmação para comandos potencialmente perigosos;
+- Roteador local para comandos simples sem consumir API;
+- Autocomplete de comandos, caminhos e comandos internos;
+- Configuração persistente com permissão `0600`;
+- Histórico protegido;
+- Limpeza do eco do shell, prompts de heredoc e marcadores internos do PTY;
+- Teste local sem consumir API.
 
----
+## Requisitos
 
-# Requisitos
+- Linux;
+- Python 3.10 ou superior;
+- Bash ou shell compatível;
+- Acesso à internet para chamadas Gemini;
+- Uma ou mais chaves Gemini válidas;
+- Pacotes Python `pexpect` e `requests`.
 
-## Sistema
+## Instalação
 
-Linux com:
-
-* Python 3
-* Bash ou shell compatível
-* Internet para acessar a API Gemini
-
-## Python
-
-Dependências:
+Clone o repositório:
 
 ```bash
-python3
-```
-
-```bash
-pexpect
-```
-
-```bash
-requests
-```
-
----
-
-# Instalação
-
-Clone o projeto:
-
-```bash
-git clone https://github.com/juliocamposmachado/nexus-terminal.git
-```
-
-Entre no diretório:
-
-```bash
-cd nexus-terminal
+git clone https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
+cd SEU_REPOSITORIO
 ```
 
 Instale as dependências:
 
 ```bash
-python3 -m pip install pexpect requests
+python3 -m pip install --user pexpect requests
 ```
 
-Ou, caso seu sistema utilize ambiente virtual:
+Em distribuições que exigem a opção de sistema gerenciado:
 
 ```bash
-python3 -m venv .venv
+python3 -m pip install --user --break-system-packages pexpect requests
 ```
 
-Ative:
-
-```bash
-source .venv/bin/activate
-```
-
-Instale:
-
-```bash
-pip install pexpect requests
-```
-
----
-
-# Executando
-
-Dê permissão:
+Dê permissão de execução ao programa:
 
 ```bash
 chmod +x nexus.py
 ```
 
+## Execução
+
 Execute:
-
-```bash
-./nexus.py
-```
-
-Ou:
 
 ```bash
 python3 nexus.py
 ```
 
----
-
-# Configuração do Gemini
-
-Execute:
-
-```bash
-./nexus.py --config
-```
-
-O NEXUS solicitará:
-
-```text
-NEXUS GEMINI CONFIG
-
-Provider: Google Gemini
-
-Modelo [gemini-3.6-flash]:
-
-Gemini API key:
-```
-
-A configuração será armazenada em:
-
-```text
-~/.config/nexus/config.json
-```
-
-O arquivo possui permissões restritas:
-
-```text
-600
-```
-
----
-
-# API Key por variável de ambiente
-
-Também é possível utilizar uma variável de ambiente:
-
-```bash
-export GEMINI_API_KEY="SUA_CHAVE"
-```
-
-Depois:
+Ou:
 
 ```bash
 ./nexus.py
 ```
 
-Para tornar a variável persistente:
+Verifique a versão:
 
 ```bash
-echo 'export GEMINI_API_KEY="SUA_CHAVE"' >> ~/.bashrc
+python3 nexus.py --version
 ```
 
-Depois:
+## Configuração das chaves
 
-```bash
-source ~/.bashrc
-```
-
-> Nunca publique sua API key no GitHub.
-
-Recomenda-se utilizar variável de ambiente ou um arquivo de configuração local que não seja enviado ao repositório.
-
----
-
-# Arquivo `.gitignore`
-
-Crie um arquivo:
+Dentro do programa, execute:
 
 ```text
-.gitignore
+/setup
 ```
 
-Com:
+Cole as chaves em um bloco. O programa aceita os seguintes formatos.
+
+### Uma chave por linha
+
+```text
+CHAVE_1
+CHAVE_2
+CHAVE_3
+```
+
+### Formato com aspas e vírgulas
+
+```text
+"CHAVE_1",
+
+"CHAVE_2",
+
+"CHAVE_3",
+```
+
+### Formato separado por vírgulas
+
+```text
+CHAVE_1, CHAVE_2, CHAVE_3
+```
+
+Depois de colar o bloco, finalize com uma linha vazia.
+
+O programa irá:
+
+- remover aspas;
+- remover vírgulas;
+- ignorar linhas vazias;
+- remover espaços extras;
+- remover chaves duplicadas;
+- preservar a ordem;
+- salvar as chaves com permissão `0600`.
+
+As chaves são armazenadas em:
+
+```text
+~/.config/nexus/config.json
+```
+
+O arquivo não deve ser enviado ao GitHub.
+
+## Variáveis de ambiente
+
+Também é possível configurar as chaves por variáveis de ambiente, sem gravá-las no código:
+
+```bash
+export NEXUS_GEMINI_KEY_1="SUA_CHAVE_1"
+export NEXUS_GEMINI_KEY_2="SUA_CHAVE_2"
+export NEXUS_GEMINI_KEY_3="SUA_CHAVE_3"
+```
+
+Não existe limite fixo no número da variável. Por exemplo:
+
+```bash
+export NEXUS_GEMINI_KEY_25="SUA_CHAVE_25"
+export NEXUS_GEMINI_KEY_100="SUA_CHAVE_100"
+```
+
+Também é possível usar um bloco completo:
+
+```bash
+export NEXUS_GEMINI_KEYS='"SUA_CHAVE_1", "SUA_CHAVE_2", "SUA_CHAVE_3"'
+```
+
+A ordem de carregamento é:
+
+1. Chaves salvas em `config.json`;
+2. Variáveis `NEXUS_GEMINI_KEY_N`, ordenadas numericamente;
+3. Conteúdo de `NEXUS_GEMINI_KEYS`;
+4. Duplicatas removidas preservando a primeira ocorrência.
+
+## Como funciona a rotação
+
+Cada pedido técnico usa uma chamada lógica:
+
+```text
+Pedido 1 → chave #1 → resposta ou comando
+Pedido 2 → chave #2 → resposta ou comando
+Pedido 3 → chave #3 → resposta ou comando
+```
+
+Se uma chave falhar durante o pedido:
+
+```text
+Pedido 1 → chave #1 → HTTP 429
+Pedido 1 → chave #2 → mesma solicitação
+```
+
+A próxima chave recebe a mesma solicitação original.
+
+Falhas consideradas para failover incluem:
+
+- HTTP `429`;
+- quota excedida;
+- HTTP `401` ou `403`;
+- timeout;
+- erro de rede;
+- HTTP `5xx`;
+- indisponibilidade temporária.
+
+Durante a mesma tarefa, uma chave que falhou não é repetida indefinidamente. Em um novo pedido, o estado temporário de falha é limpo e a rotação continua a partir do cursor atual.
+
+## Formato da resposta da IA
+
+A chamada One-Shot solicita JSON no seguinte formato:
+
+```json
+{
+  "response": "resposta textual opcional",
+  "command": "comando Linux opcional",
+  "reason": "motivo"
+}
+```
+
+Se `command` estiver preenchido, o NEXUS:
+
+1. mostra o comando;
+2. solicita confirmação quando necessário;
+3. executa o comando no PTY real;
+4. mostra a saída;
+5. mostra o código de saída.
+
+Se somente `response` estiver preenchido, o texto é exibido sem executar comandos.
+
+## Exemplos de uso
+
+### Comando resolvido localmente, sem API
+
+```text
+/nexus mostre meu diretório
+```
+
+```text
+/nexus mostre a memória
+```
+
+```text
+/nexus liste os arquivos
+```
+
+### Pedido técnico com uma chamada
+
+```text
+/nexus mostre a versão do kernel Linux
+```
+
+A IA pode retornar:
+
+```json
+{
+  "response": "",
+  "command": "uname -r",
+  "reason": "Consulta local do kernel"
+}
+```
+
+### Criar e executar um script Bash
+
+```text
+/nexus crie um script Bash temporário em /tmp/nexus-test.sh, execute-o e mostre o resultado. Use um único comando shell seguro.
+```
+
+### Múltiplos passos no PTY
+
+```text
+/nexus crie um diretório em /tmp/nexus-data, gere um arquivo com cinco linhas, ordene seu conteúdo e crie um relatório com a quantidade de linhas
+```
+
+## Comandos internos
+
+| Comando | Função |
+|---|---|
+| `/nexus <tarefa>` | Faz uma chamada One-Shot e executa a ação retornada |
+| `/nexus --auto <tarefa>` | Executa automaticamente comandos não perigosos |
+| `/nexus --fast <tarefa>` | Modo compatível de execução rápida |
+| `/nexus stop` | Interrompe a tarefa atual |
+| `/status` | Mostra o estado do NEXUS e do pool |
+| `/keys` | Mostra a saúde das chaves sem revelar os valores |
+| `/setup` | Configura ou substitui o bloco de chaves |
+| `/reset-limits` | Remove cooldowns das chaves |
+| `/config` | Mostra a configuração sem imprimir as chaves |
+| `/self-test` | Executa diagnóstico local sem consumir API |
+| `/clear` | Limpa o terminal |
+| `/help` | Mostra a ajuda |
+| `/exit` | Encerra o programa |
+
+## Testes
+
+### Teste de sintaxe
+
+```bash
+python3 -m py_compile nexus.py
+```
+
+### Self-test
+
+```bash
+python3 nexus.py --self-test
+```
+
+O self-test verifica:
+
+- versão do Python;
+- `pexpect`;
+- `requests`;
+- `readline`;
+- shell disponível;
+- comandos básicos;
+- PTY real;
+- código de saída do processo.
+
+Esse teste não consome API.
+
+### Teste do PTY
+
+Dentro do NEXUS:
+
+```text
+printf 'NEXUS_TEST_OK'
+```
+
+O resultado esperado inclui:
+
+```text
+NEXUS_TEST_OK
+[exit code: 0]
+```
+
+### Teste de pipeline
+
+```text
+printf 'banana\nlaranja\nbanana\nuva\n' | sort | uniq -c | sort -nr
+```
+
+### Teste de script Bash
+
+```text
+printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'mkdir -p /tmp/nexus-test' 'printf "%s\n" alpha beta gamma > /tmp/nexus-test/input.txt' 'sort /tmp/nexus-test/input.txt > /tmp/nexus-test/sorted.txt' 'wc -l /tmp/nexus-test/sorted.txt' > /tmp/nexus-test.sh && chmod +x /tmp/nexus-test.sh && /tmp/nexus-test.sh
+```
+
+## Segurança
+
+- Nunca coloque chaves reais no código-fonte;
+- Nunca envie `config.json` para o GitHub;
+- Nunca publique chaves em issues, logs ou screenshots;
+- O programa não imprime chaves completas;
+- A configuração é gravada com permissão `0600`;
+- Comandos potencialmente perigosos pedem confirmação;
+- O PTY permanece real, portanto comandos confirmados têm efeito no sistema;
+- Revogue chaves que tenham sido expostas publicamente;
+- Use um arquivo `.gitignore` apropriado.
+
+Exemplo de `.gitignore`:
 
 ```gitignore
 __pycache__/
 *.pyc
-*.pyo
-
-.venv/
-venv/
-env/
-
 .env
-.env.*
-*.log
-
 config.json
-
+*.log
 .DS_Store
 ```
 
----
+A configuração normalmente fica fora do repositório, em `~/.config/nexus/`.
 
-# Modos de operação
-
-O NEXUS possui três modos principais.
-
-## Modo normal
+## Arquitetura
 
 ```text
-/nexus <pergunta>
+Entrada do usuário
+        ↓
+Router local
+        ├── conversa local
+        ├── comando local
+        └── pedido técnico
+                ↓
+         Gemini One-Shot
+                ↓
+       response ou command
+                ↓
+          Confirmação
+                ↓
+             PTY real
+                ↓
+       saída + exit code
 ```
 
-Exemplo:
+O pool de chaves mantém, para cada chave:
+
+- quantidade de chamadas;
+- quantidade de HTTP 429;
+- quantidade de erros;
+- quantidade de erros de autenticação;
+- cooldown individual.
+
+## Arquivos principais
 
 ```text
-/nexus qual é a versão do meu kernel?
+nexus.py                       versão principal para execução
+nexus_terminal_sequencial.py   cópia da versão sequencial
+nexus_fixed.py                 cópia corrigida do núcleo
+README.md                      documentação
 ```
 
-O Gemini poderá solicitar:
+A interface gráfica não faz parte desta versão de uso. O projeto é executado exclusivamente pelo código Python no terminal.
 
-```xml
-<ACTION>
-{"command":"uname -a"}
-</ACTION>
-```
+## Limitações conhecidas
 
-O NEXUS executará o comando no Linux real.
+- Uma única chamada por pedido reduz o custo e a latência, mas não faz validação automática posterior do resultado;
+- Se todas as chaves pertencerem ao mesmo projeto Google, elas podem compartilhar a mesma quota;
+- HTTP 429 pode indicar limite do projeto, modelo ou conta, e não apenas uma chave individual;
+- O comando retornado pela IA deve ser revisado antes da confirmação;
+- O PTY executa comandos reais no sistema;
+- Chaves inválidas ou revogadas são isoladas temporariamente pelo failover.
 
----
+## Licença
 
-# Modo automático
+Adicione aqui a licença escolhida para o projeto, por exemplo:
 
 ```text
-/nexus --auto <tarefa>
+MIT License
 ```
 
-Exemplo:
-
-```text
-/nexus --auto faça um diagnóstico do sistema
-```
-
-Nesse modo, o agente pode executar automaticamente os comandos necessários.
-
-Mesmo no modo automático, comandos classificados como potencialmente perigosos continuam sujeitos à confirmação.
-
----
-
-# Modo assistido
-
-```text
-/nexus --assist <tarefa>
-```
-
-Exemplo:
-
-```text
-/nexus --assist analise o uso de memória deste computador
-```
-
-O agente propõe os comandos e o usuário decide se cada comando deve ser executado.
-
----
-
-# Interromper o agente
-
-Durante uma operação:
-
-```text
-/nexus stop
-```
-
----
-
-# Comandos internos
-
-## Configuração
-
-```text
-/config
-```
-
-## Status
-
-```text
-/status
-```
-
-## Limpar tela
-
-```text
-/clear
-```
-
-## Sair
-
-```text
-/exit
-```
-
----
-
-# Exemplos
-
-## Verificar sistema
-
-```text
-/nexus mostre informações completas sobre meu sistema Linux
-```
-
-O agente poderá executar:
-
-```bash
-uname -a
-```
-
-```bash
-lscpu
-```
-
-```bash
-free -h
-```
-
-```bash
-df -h
-```
-
-```bash
-lsblk
-```
-
----
-
-## Verificar processos
-
-```text
-/nexus quais processos estão consumindo mais memória?
-```
-
----
-
-## Verificar Docker
-
-```text
-/nexus verifique meus containers Docker
-```
-
----
-
-## Trabalhar com Git
-
-```text
-/nexus mostre o status do meu repositório Git
-```
-
-O agente poderá executar:
-
-```bash
-git status
-```
-
----
-
-# ACTION
-
-A comunicação entre o Gemini e o NEXUS utiliza uma estrutura simples:
-
-```xml
-<ACTION>
-{"command":"comando Linux"}
-</ACTION>
-```
-
-Por exemplo:
-
-```xml
-<ACTION>
-{"command":"pwd"}
-</ACTION>
-```
-
-O NEXUS extrai o comando e executa no PTY.
-
-Depois retorna para a IA:
-
-```text
-COMMAND:
-
-pwd
-
-EXIT CODE:
-
-0
-
-REAL OUTPUT:
-
-/home/zorin
-```
-
-A IA então pode decidir se precisa executar outro comando.
-
----
-
-# Terminal Linux REAL
-
-O NEXUS não utiliza um terminal simulado.
-
-A execução é realizada através de um pseudo-terminal:
-
-```text
-Python
-   │
-   ▼
-pexpect
-   │
-   ▼
-PTY
-   │
-   ▼
-Bash
-   │
-   ▼
-Linux
-```
-
-Isso permite manter uma sessão persistente.
-
-Por exemplo:
-
-```text
-cd ~/projeto
-```
-
-seguido por:
-
-```text
-pwd
-```
-
-mantém o contexto do diretório dentro da sessão.
-
----
-
-# Sistema de segurança
-
-O NEXUS possui uma camada básica de proteção para comandos potencialmente destrutivos.
-
-Entre os padrões monitorados estão:
-
-```text
-rm -rf /
-rm -rf /*
-mkfs
-dd ... of=/dev/...
-parted
-fdisk
-format
-shutdown
-reboot
-poweroff
-fork bomb
-```
-
-Quando um comando é identificado como potencialmente perigoso, o NEXUS solicita confirmação.
-
-Exemplo:
-
-```text
-COMANDO POTENCIALMENTE PERIGOSO.
-
-Executar mesmo assim? [sim/N]:
-```
-
-O objetivo é evitar que uma ação destrutiva seja executada acidentalmente.
-
-> Este mecanismo não deve ser considerado uma sandbox ou uma garantia de segurança. O usuário continua responsável pelos comandos executados no sistema.
-
----
-
-# Colagem no terminal
-
-O NEXUS trata sequências de controle utilizadas pelo recurso de **bracketed paste** do terminal.
-
-Sequências como:
-
-```text
-ESC [200~
-```
-
-e:
-
-```text
-ESC [201~
-```
-
-são removidas quando necessário.
-
-Também são tratadas sequências ANSI indesejadas.
-
-Isso permite colar comandos normalmente no terminal sem introduzir caracteres estranhos no shell.
-
----
-
-# Estrutura do projeto
-
-Estrutura básica:
-
-```text
-nexus-terminal/
-│
-├── nexus.py
-├── README.md
-├── .gitignore
-└── LICENSE
-```
-
-Configuração do usuário:
-
-```text
-~/.config/nexus/
-└── config.json
-```
-
----
-
-# Arquitetura
-
-O projeto é dividido conceitualmente em quatro componentes principais.
-
-## 1. NexusApp
-
-Responsável pela aplicação principal.
-
-Gerencia:
-
-* comandos
-* modos de execução
-* interação com usuário
-* agente
-* contexto
-
----
-
-## 2. RealPTY
-
-Responsável pelo terminal Linux real.
-
-Utiliza:
-
-```python
-pexpect
-```
-
-Responsabilidades:
-
-* iniciar shell
-* escrever comandos
-* receber saída
-* manter sessão
-* capturar exit code
-* controlar tamanho do terminal
-* tratar saída ANSI
-
----
-
-## 3. AIProvider
-
-Responsável pela comunicação com Gemini.
-
-Utiliza:
-
-```python
-requests
-```
-
-A comunicação utiliza a API oficial do Gemini.
-
-O endpoint é construído automaticamente:
-
-```text
-https://generativelanguage.googleapis.com/
-v1beta/models/{model}:generateContent
-```
-
-A URL não é configurável pelo usuário, evitando que uma configuração antiga aponte acidentalmente para outro provedor.
-
----
-
-## 4. Action Parser
-
-Responsável por localizar:
-
-```xml
-<ACTION>
-...
-</ACTION>
-```
-
-na resposta da IA.
-
-O JSON é analisado e o comando é extraído:
-
-```json
-{
-  "command": "pwd"
-}
-```
-
----
-
-# Filosofia do projeto
-
-O princípio fundamental do NEXUS é:
-
-> **A IA não deve fingir que executou um comando.**
-
-Ela solicita.
-
-O Linux executa.
-
-O Linux responde.
-
-A IA analisa.
-
-Isso cria um ciclo baseado em resultados reais:
-
-```text
-AI
- ↓
-COMMAND
- ↓
-REAL LINUX
- ↓
-REAL OUTPUT
- ↓
-AI
-```
-
-Em vez de:
-
-```text
-AI
- ↓
-"Eu executei..."
- ↓
-resultado inventado
-```
-
----
-
-# Estado do projeto
-
-**Versão atual:**
-
-```text
-2.1.0-GEMINI
-```
-
-Status:
-
-```text
-Desenvolvimento ativo
-```
-
----
-
-# Roadmap
-
-Possíveis evoluções:
-
-* [ ] Histórico de comandos
-* [ ] Histórico de conversas
-* [ ] Cancelamento imediato de processos
-* [ ] Controle avançado de permissões
-* [ ] Sandbox opcional
-* [ ] Logs de execução
-* [ ] Sessões persistentes
-* [ ] Múltiplos agentes
-* [ ] Sistema de plugins
-* [ ] Integração com Docker
-* [ ] Integração com Kubernetes
-* [ ] Integração SSH
-* [ ] Interface TUI
-* [ ] Interface gráfica
-* [ ] Execução paralela controlada
-* [ ] Memória de projeto
-* [ ] Sistema de planejamento multi-etapas
-
----
-
-# Tecnologias
-
-O projeto utiliza:
-
-* Python 3
-* Google Gemini API
-* Pexpect
-* Requests
-* Linux PTY
-* Bash
-* JSON
-* ANSI terminal control
-
----
-
-# Licença
-
-Este projeto é distribuído sob os termos definidos no arquivo:
-
-```text
-LICENSE
-```
-
----
-
-# Autor
-
-**Julio Cesar Campos Machado**
-
-NEXUS TERMINAL
-WHITE RAT
-
-GitHub:
-
-[https://github.com/juliocamposmachado](https://github.com/juliocamposmachado)
-
-Projeto:
-
-[https://github.com/juliocamposmachado/nexus-terminal](https://github.com/juliocamposmachado/nexus-terminal)
-
----
-
-# Contribuições
-
-Sugestões, melhorias, correções e contribuições são bem-vindas.
-
-Para contribuir:
-
-```bash
-git clone https://github.com/juliocamposmachado/nexus-terminal.git
-```
-
-Crie uma branch:
-
-```bash
-git checkout -b minha-feature
-```
-
-Faça suas alterações:
-
-```bash
-git add .
-```
-
-Crie o commit:
-
-```bash
-git commit -m "Adiciona nova funcionalidade"
-```
-
-Envie:
-
-```bash
-git push origin minha-feature
-```
-
----
-
-## NEXUS TERMINAL
-
-```text
-AI THINKS.
-LINUX EXECUTES.
-REAL OUTPUT RETURNS.
-```
-
-**WHITE RAT — NEXUS TERMINAL**
+Não publique chaves Gemini reais no repositório.
