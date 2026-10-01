@@ -2,8 +2,7 @@
 
 **NEXUS TERMINAL** é um agente Linux escrito em Python com PTY real, integração com Gemini, execução de comandos, roteamento local e pool ilimitado de chaves com rotação sequencial.
 
-<img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/3a2a0fbd-bce2-4a74-a65e-8fe696224974" />
-
+<img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/93bab8d1-3608-4653-a878-afec548c237a" />
 
 Esta versão utiliza o fluxo **One-Shot**:
 
