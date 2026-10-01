@@ -1,2787 +1,1295 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+NEXUS TERMINAL - WHITE RAT
+v6.0.0-SEQUENTIAL
+
+Smart Router + Real PTY + Gemini One-Shot + Key Pool + Autocomplete.
+
+Principais melhorias sobre a v4:
+- NUNCA grava API keys no código: usa ~/.config/nexus/config.json
+  ou variáveis NEXUS_GEMINI_KEY_1..NEXUS_GEMINI_KEY_N.
+- Pool de chaves thread-safe, ilimitado, com rotação sequencial, cooldown e failover.
+- Respeita Retry-After e diferencia 429, 401/403, 5xx e erros 4xx.
+- Uma chamada por pedido; failover só troca a chave quando a atual falha.
+- Router local mais amplo: tarefas simples não consomem API.
+- --auto/--fast podem aparecer em qualquer ordem.
+- PTY real persistente, com cwd sincronizado e captura de exit code.
+- Comandos perigosos exigem confirmação mesmo em modo automático.
+- Autocomplete de /comandos, executáveis e caminhos.
+- Configuração segura com permissões 0600.
+- Histórico protegido.
+- Self-test sem consumir API.
+- Logs opcionais sem registrar chaves.
+
+Instalação:
+  python3 -m pip install --user pexpect requests
+
+Primeiro uso:
+  python3 nexus.py --setup
+
+Executar:
+  python3 nexus.py
+"""
+
+from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import queue
+import readline
 import re
-import select
+import shutil
 import signal
 import sys
 import threading
 import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
-
-# ============================================================
-# DEPENDÊNCIAS
-# ============================================================
+from typing import Any, Optional
 
 try:
     import pexpect
 except ImportError:
     print("Dependência ausente: pexpect")
-    print()
-    print("Instale com:")
-    print("python3 -m pip install pexpect requests")
-    sys.exit(1)
+    print("Instale: python3 -m pip install --user pexpect requests")
+    raise SystemExit(1)
 
 try:
     import requests
 except ImportError:
     print("Dependência ausente: requests")
-    print()
-    print("Instale com:")
-    print("python3 -m pip install pexpect requests")
-    sys.exit(1)
+    print("Instale: python3 -m pip install --user pexpect requests")
+    raise SystemExit(1)
 
-
-# ============================================================
-# CONFIGURAÇÃO
-# ============================================================
 
 APP_NAME = "NEXUS TERMINAL"
-APP_VERSION = "2.1.0-GEMINI"
-
-CONFIG_DIR = (
-    Path.home()
-    / ".config"
-    / "nexus"
-)
-
+APP_VERSION = "6.0.0-SEQUENTIAL"
+CONFIG_DIR = Path.home() / ".config" / "nexus"
 CONFIG_FILE = CONFIG_DIR / "config.json"
+HISTORY_FILE = CONFIG_DIR / "history"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+DEFAULT_MODEL = "gemini-3.6-flash"
 
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/"
-    "v1beta/models/{model}:generateContent"
-)
+# Não coloque chaves reais aqui.
+API_KEY_ENV_PREFIX = "NEXUS_GEMINI_KEY_"
 
-
-# ============================================================
-# GEMINI
-# ============================================================
-
-DEFAULT_CONFIG = {
-
-    "provider": "gemini",
-
-    "model": "gemini-3.6-flash",
-
-    "api_key": "",
-
+DEFAULT_CONFIG: dict[str, Any] = {
+    "model": DEFAULT_MODEL,
+    "temperature": 0.1,
+    "max_output_tokens": 700,
+    "api_timeout": 60,
+    "terminal_timeout": 120,
+    "max_agent_cycles": 3,
+    "max_api_calls_per_task": 12,
+    "medium_api_budget": 5,
+    "complex_api_budget": 8,
+    "api_min_interval": 8,
+    "execution_cooldown": 1,
+    "rate_limit_backoff": 60,
+    "auth_cooldown": 300,
+    "error_cooldown": 15,
+    # None = tentar todas as chaves disponíveis, sem limite artificial.
+    "max_key_failover": None,
+    "max_retries": 1,
+    "backoff_multiplier": 2,
     "auto_execute": False,
-
-    "max_output_chars": 12000,
-
-    "temperature": 0.2,
-
-    "max_output_tokens": 4096,
+    "dangerous_always_confirm": True,
+    "max_output_chars": 6000,
+    "request_max_chars": 12000,
+    "log_enabled": False,
+    "keys": [],
 }
 
+AGENTS = {
+    "unica": "RESPOSTA ÚNICA",
+    "interpretacao": "INTERPRETAÇÃO",
+    "planejamento": "PLANEJAMENTO",
+    "decisao": "DECISÃO",
+    "execucao": "EXECUÇÃO",
+    "validacao": "VALIDAÇÃO",
+    "conclusao": "CONCLUSÃO",
+}
 
-# ============================================================
-# PROMPT DO AGENTE
-# ============================================================
+PROMPTS = {
+    "unica": """
+Você é o agente único do NEXUS TERMINAL.
+Resolva o pedido do usuário em UMA ÚNICA resposta. Não crie fases,
+não peça para outros agentes continuarem e não repita o pedido.
+Use o estado real do terminal fornecido.
 
-SYSTEM_PROMPT = r"""
-Você é WHITE RAT, o agente Linux do NEXUS TERMINAL.
+Se o pedido exigir executar Linux, produza UM ÚNICO comando seguro no campo
+command. Se não exigir comando, deixe command como string vazia e responda
+no campo response.
 
-Você está conectado a um TERMINAL LINUX REAL.
+Não use markdown. Retorne SOMENTE JSON válido neste formato:
+{"response":"resposta curta","command":"","reason":"motivo"}
 
-PERSONALIDADE:
-
-- extremamente inteligente
-- técnico
-- direto
-- objetivo
-- preciso
-- pode ser sarcástico quando apropriado
-- não inventa fatos
-- não inventa resultados
-- não afirma que executou algo sem receber o resultado real
-
-============================================================
-AMBIENTE
-============================================================
-
-O NEXUS TERMINAL possui acesso a um shell Linux REAL
-através de um PTY persistente.
-
-Você recebe informações reais sobre:
-
-- shell
-- usuário
-- diretório atual
-- código de saída
-- saída real do terminal
-- modo de execução
-
-Você NÃO deve simular o terminal.
-
-============================================================
-EXECUÇÃO DE COMANDOS
-============================================================
-
-Quando o usuário pedir para executar alguma coisa no Linux,
-você pode produzir uma ACTION:
-
-<ACTION>
-{"command":"comando aqui"}
-</ACTION>
-
-EXEMPLO:
-
-<ACTION>
-{"command":"uname -a"}
-</ACTION>
-
-Vários comandos:
-
-<ACTION>
-{"command":"pwd"}
-</ACTION>
-
-<ACTION>
-{"command":"ls -la"}
-</ACTION>
-
-============================================================
-REGRAS DAS ACTIONS
-============================================================
-
-1. Uma ACTION contém exatamente um comando.
-
-2. O campo "command" deve conter somente o comando Linux.
-
-3. Não coloque explicações dentro de "command".
-
-4. Não coloque Markdown dentro de "command".
-
-5. Não invente stdout.
-
-6. Não invente stderr.
-
-7. Não invente arquivos.
-
-8. Não invente processos.
-
-9. Não invente versões.
-
-10. Não diga que um comando foi executado antes
-    de receber o resultado real.
-
-11. Depois que o NEXUS executar uma ACTION,
-    ele enviará o resultado REAL para você.
-
-12. Analise o resultado REAL antes de solicitar
-    uma nova ACTION.
-
-13. Se o resultado já for suficiente para responder
-    ao usuário, não solicite outro comando.
-
-14. Não execute comandos desnecessários.
-
-============================================================
-DIAGNÓSTICO
-============================================================
-
-Para diagnóstico Linux, prefira comandos reais.
-
-Exemplos:
-
-uname -a
-hostnamectl
-pwd
-ls -la
-lsblk
-df -h
-free -h
-lscpu
-lsusb
-lspci
-ip addr
-ip route
-systemctl status
-journalctl
-ps aux
-top
-docker ps
-docker images
-git status
-git branch
-python3 --version
-pip --version
-
-============================================================
-OPERAÇÕES PERIGOSAS
-============================================================
-
-Não solicite automaticamente operações claramente destrutivas,
-incluindo:
-
-rm -rf /
-rm -rf /*
-mkfs
-dd para dispositivos
-apagamento de partições
-formatação de discos
-parted destrutivo
-fdisk destrutivo
-shutdown
-reboot
-poweroff
-
-O NEXUS solicitará confirmação ao usuário.
-
-============================================================
-PRINCÍPIO FUNDAMENTAL
-============================================================
-
-Você não controla o terminal diretamente.
-
-Você solicita uma ACTION.
-
-O NEXUS executa a ACTION no PTY Linux real.
-
-O NEXUS devolve o resultado real.
-
-Você analisa o resultado real.
-
-Somente então solicita outra ACTION, se necessário.
-
-Nunca simule a execução.
-"""
-
-
-# ============================================================
-# LIMPEZA DE INPUT
-# ============================================================
+Regras de segurança:
+- Não invente resultados do terminal.
+- Não use comandos destrutivos sem solicitação explícita.
+- Nunca produza rm -rf /, mkfs, wipefs, dd em dispositivo, parted, fdisk,
+  shutdown, reboot ou poweroff sem solicitação explícita e inequívoca.
+""",
+    "interpretacao": """
+Você é o agente INTERPRETAÇÃO do NEXUS TERMINAL.
+Transforme o pedido do usuário em uma tarefa Linux objetiva.
+Não execute nada, não invente dados e não crie tarefas extras.
+Retorne SOMENTE JSON válido:
+{"task":"...","requirements":[]}
+""",
+    "planejamento": """
+Você é o agente PLANEJAMENTO do NEXUS TERMINAL.
+Determine a próxima ação necessária usando o estado REAL do terminal.
+Uma próxima etapa por vez. Não repita ações já concluídas.
+Retorne SOMENTE JSON válido:
+{"next_step":"...","reason":"..."}
+""",
+    "decisao": """
+Você é o agente DECISÃO do NEXUS TERMINAL.
+Determine se é necessário executar Linux agora.
+Se a informação já estiver disponível, execute=false.
+Retorne SOMENTE JSON válido:
+{"execute":true,"reason":"..."}
+""",
+    "execucao": """
+Você é o agente EXECUÇÃO do NEXUS TERMINAL.
+Converta a próxima etapa em UM ÚNICO comando Linux.
+O comando será executado em um PTY Linux REAL.
+Prefira comandos de leitura para investigação.
+Não use markdown.
+Não use comandos destrutivos sem necessidade.
+Nunca produza rm -rf /, mkfs, wipefs, dd em dispositivo, parted,
+fdisk, shutdown, reboot ou poweroff sem solicitação explícita e inequívoca.
+Retorne SOMENTE JSON válido:
+{"command":"..."}
+""",
+    "validacao": """
+Você é o agente VALIDAÇÃO do NEXUS TERMINAL.
+Analise SOMENTE o resultado REAL fornecido pelo terminal.
+exit code 0 não garante sucesso.
+Retorne SOMENTE JSON válido:
+{"success":true,"reason":"..."}
+""",
+    "conclusao": """
+Você é o agente CONCLUSÃO do NEXUS TERMINAL.
+Resuma o resultado final em uma frase curta, sem inventar dados.
+Retorne SOMENTE JSON válido:
+{"done":true,"message":"..."}
+""",
+}
 
 ANSI_ESCAPE_RE = re.compile(
-    r"""
-    \x1B
-    (?:
-        \[[0-?]*[ -/]*[@-~]
-        |
-        \][^\x07]*(?:\x07|\x1B\\)
-        |
-        [@-Z\\-_]
-    )
-    """,
+    r"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\)|[@-Z\\-_])",
     re.VERBOSE,
 )
 
+DANGEROUS_PATTERNS = [
+    r"\brm\s+-rf\s+/(?:\s|$)",
+    r"\brm\s+-rf\s+/\*",
+    r"\brm\s+.*\s+/(?:\s|$)",
+    r"\bmkfs(?:\.|\s)",
+    r"\bwipefs\b",
+    r"\bparted\b",
+    r"\bfdisk\b",
+    r"\bcfdisk\b",
+    r"\bsgdisk\b",
+    r"\bdd\s+.*\bof=/dev/",
+    r"(?:>|>>|2>|2>>|&>)\s*/dev/(?:sd[a-z]|nvme\d+n\d+)",
+    r"\bshutdown\b",
+    r"\breboot\b",
+    r"\bpoweroff\b",
+    r"\bsystemctl\s+(?:reboot|poweroff|halt)\b",
+    r":\(\)\s*\{",
+    r"\bchmod\s+-r\s+777\s+/$",
+    r"\bchown\s+-r\s+.*\s+/$",
+]
 
-def clean_terminal_input(value):
 
+def clean_text(value: Any) -> str:
     if value is None:
         return ""
-
-    value = str(value)
-
-    # --------------------------------------------------------
-    # BRACKETED PASTE
-    # --------------------------------------------------------
-
-    value = value.replace(
-        "\x1b[200~",
-        "",
-    )
-
-    value = value.replace(
-        "\x1b[201~",
-        "",
-    )
-
-    # --------------------------------------------------------
-    # ANSI / ESC
-    # --------------------------------------------------------
-
-    value = ANSI_ESCAPE_RE.sub(
-        "",
-        value,
-    )
-
-    # --------------------------------------------------------
-    # CONTROLES
-    # --------------------------------------------------------
-
-    cleaned = []
-
-    for char in value:
-
-        code = ord(char)
-
-        if char in "\n\r\t":
-
-            cleaned.append(char)
-
-            continue
-
-        if code >= 32 and code != 127:
-
-            cleaned.append(char)
-
-    return "".join(cleaned).strip()
+    text = str(value).replace("\x1b[200~", "").replace("\x1b[201~", "")
+    return ANSI_ESCAPE_RE.sub("", text).strip()
 
 
-def clean_shell_input(value):
-
+def clean_command(value: Any) -> str:
     if value is None:
         return ""
-
-    value = str(value)
-
-    # Remove bracketed paste markers.
-    value = value.replace(
-        "\x1b[200~",
-        "",
-    )
-
-    value = value.replace(
-        "\x1b[201~",
-        "",
-    )
-
-    # Remove ANSI escape sequences.
-    value = ANSI_ESCAPE_RE.sub(
-        "",
-        value,
-    )
-
-    # Remove NUL.
-    value = value.replace(
-        "\x00",
-        "",
-    )
-
-    # Remove DEL.
-    value = value.replace(
-        "\x7f",
-        "",
-    )
-
-    return value
+    text = str(value).replace("\x00", "").replace("\x7f", "").strip()
+    text = re.sub(r"^```(?:bash|sh|shell)?\s*", "", text, flags=re.I)
+    text = re.sub(r"\s*```$", "", text).strip()
+    text = re.sub(r"^\s*command\s*:\s*", "", text, flags=re.I)
+    return text.strip()
 
 
-def normalize_api_key(value):
-
-    value = clean_terminal_input(
-        value
-    )
-
-    value = re.sub(
-        r"\s+",
-        "",
-        value,
-    )
-
-    return value
+def normalize_input(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text).strip().lower())
 
 
-# ============================================================
-# CONFIGURAÇÃO
-# ============================================================
+def as_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"true", "1", "yes", "sim", "s", "y"}
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return default
 
-def save_config(config):
 
-    CONFIG_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+def is_dangerous(command: str) -> bool:
+    normalized = re.sub(r"\s+", " ", command.lower()).strip()
+    return any(re.search(pattern, normalized) for pattern in DANGEROUS_PATTERNS)
 
-    CONFIG_FILE.write_text(
-        json.dumps(
-            config,
-            indent=2,
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
 
+def atomic_write(path: Path, content: str, mode: int = 0o600) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(content, encoding="utf-8")
     try:
-
-        os.chmod(
-            CONFIG_FILE,
-            0o600,
-        )
-
+        os.chmod(tmp, mode)
     except OSError:
+        pass
+    os.replace(tmp, path)
 
+
+def load_config() -> dict[str, Any]:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config = copy.deepcopy(DEFAULT_CONFIG)
+    if CONFIG_FILE.exists():
+        try:
+            data = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                config.update(data)
+        except Exception as exc:
+            print(f"[NEXUS] Aviso: config.json inválido: {exc}")
+    # Normaliza campos.
+    if not isinstance(config.get("keys"), list):
+        config["keys"] = []
+    return config
+
+
+def save_config(config: dict[str, Any]) -> None:
+    # Remove chaves inválidas e normaliza strings.
+    data = copy.deepcopy(config)
+    data["keys"] = [str(k).strip() for k in data.get("keys", []) if str(k).strip()]
+    atomic_write(CONFIG_FILE, json.dumps(data, indent=2, ensure_ascii=False))
+
+
+def parse_api_keys_block(value: str) -> list[str]:
+    """Extrai chaves de bloco simples ou no formato de lista JSON."""
+    if not value:
+        return []
+    text = str(value).strip()
+
+    # Aceita exatamente este formato, inclusive indentação e vírgula final:
+    # "chave-1",
+    # "chave-2",
+    # "chave-3",
+    quoted = re.findall(r'"([^"\r\n]*)"', text)
+    if quoted:
+        return [item.strip() for item in quoted if item.strip()]
+
+    # Também mantém compatibilidade com uma chave por linha ou separadores.
+    parts = re.split(r"[\r\n,;]+", text)
+    result: list[str] = []
+    for item in parts:
+        item = item.strip().strip('"\'')
+        if item:
+            result.append(item)
+    return result
+
+
+def get_api_keys(config: dict[str, Any]) -> list[str]:
+    keys: list[str] = []
+    configured = config.get("keys", [])
+    if isinstance(configured, list):
+        for item in configured:
+            keys.extend(parse_api_keys_block(str(item)))
+
+    # Lê NEXUS_GEMINI_KEY_1, NEXUS_GEMINI_KEY_2, ... sem limite fixo.
+    env_items: list[tuple[int, str]] = []
+    pattern = re.compile(r"^" + re.escape(API_KEY_ENV_PREFIX) + r"(\d+)$")
+    for name, value in os.environ.items():
+        match = pattern.match(name)
+        if match and value.strip():
+            env_items.append((int(match.group(1)), value.strip()))
+    for _, value in sorted(env_items):
+        keys.extend(parse_api_keys_block(value))
+
+    # Também aceita um bloco inteiro em NEXUS_GEMINI_KEYS.
+    keys.extend(parse_api_keys_block(os.environ.get("NEXUS_GEMINI_KEYS", "")))
+    # Remove duplicadas preservando a ordem configurada.
+    return list(dict.fromkeys(keys))
+
+
+def validate_keys(config: dict[str, Any]) -> list[str]:
+    keys = get_api_keys(config)
+    if not keys:
+        return ["Nenhuma chave Gemini configurada."]
+    return []
+
+
+class RateLimitError(Exception):
+    pass
+
+
+class AgentError(Exception):
+    pass
+
+
+@dataclass
+class KeyState:
+    cooldown_until: float = 0.0
+    requests: int = 0
+    errors: int = 0
+    rate_limits: int = 0
+    auth_errors: int = 0
+
+
+class KeyPool:
+    def __init__(self, config: dict[str, Any]):
+        self.config = config
+        self.lock = threading.RLock()
+        self.index = 0
+        self.states: list[KeyState] = []
+        self.failed_this_task: set[int] = set()
+
+    def begin_task(self) -> None:
+        """Limpa falhas temporárias para uma nova tarefa do usuário."""
+        with self.lock:
+            self.failed_this_task.clear()
+
+    @property
+    def keys(self) -> list[str]:
+        keys = get_api_keys(self.config)
+        while len(self.states) < len(keys):
+            self.states.append(KeyState())
+        # Se o pool foi reduzido, estados antigos ficam preservados para quando
+        # chaves forem adicionadas novamente, sem afetar a ordem atual.
+        return keys
+
+    def available_indices(self, excluded: set[int] | None = None) -> list[int]:
+        excluded = set(excluded or set()) | self.failed_this_task
+        now = time.monotonic()
+        keys = self.keys
+        return [i for i in range(len(keys)) if i not in excluded and self.states[i].cooldown_until <= now]
+
+    def next_key(self, excluded: set[int] | None = None) -> tuple[int, str]:
+        with self.lock:
+            keys = self.keys
+            excluded = set(excluded or set()) | self.failed_this_task
+            available = self.available_indices(excluded)
+            if not available:
+                if not keys:
+                    raise AgentError("Nenhuma chave Gemini configurada.")
+                now = time.monotonic()
+                future = [self.states[i].cooldown_until for i in range(len(keys)) if i not in excluded and self.states[i].cooldown_until > now]
+                if future:
+                    wait = max(1, int(min(future) - now + 0.999))
+                    raise RateLimitError(f"Todas as chaves disponíveis estão em cooldown. Aguarde {wait}s.")
+                if len(self.failed_this_task) >= len(keys):
+                    raise RateLimitError("Todas as chaves falharam nesta tarefa; execução encerrada para evitar loop.")
+                raise AgentError("Nenhuma chave disponível no pool.")
+            total = len(keys)
+            for offset in range(total):
+                candidate = (self.index + offset) % total
+                if candidate in available:
+                    self.index = (candidate + 1) % total
+                    self.states[candidate].requests += 1
+                    return candidate, keys[candidate]
+            raise AgentError("Falha ao selecionar chave.")
+
+    def mark_429(self, index: int, seconds: Optional[int] = None) -> None:
+        with self.lock:
+            seconds = seconds if seconds is not None else int(self.config.get("rate_limit_backoff", 60))
+            self.states[index].rate_limits += 1
+            self.states[index].cooldown_until = time.monotonic() + max(1, seconds)
+
+    def mark_error(self, index: int, cooldown: Optional[int] = None) -> None:
+        with self.lock:
+            cooldown = int(cooldown if cooldown is not None else self.config.get("error_cooldown", 15))
+            self.states[index].errors += 1
+            self.states[index].cooldown_until = time.monotonic() + max(1, cooldown)
+
+    def mark_auth_error(self, index: int) -> None:
+        with self.lock:
+            self.states[index].auth_errors += 1
+            self.states[index].cooldown_until = time.monotonic() + int(self.config.get("auth_cooldown", 300))
+
+    def mark_failed_this_task(self, index: int) -> None:
+        with self.lock:
+            self.failed_this_task.add(index)
+
+    def reset(self) -> None:
+        with self.lock:
+            for state in self.states:
+                state.cooldown_until = 0.0
+
+    def status(self) -> list[dict[str, Any]]:
+        now = time.monotonic()
+        keys = self.keys
+        result = []
+        for i in range(len(keys)):
+            s = self.states[i]
+            if s.cooldown_until > now:
+                state = f"COOLDOWN {int(s.cooldown_until - now)}s"
+            else:
+                state = "DISPONÍVEL"
+            result.append({"index": i + 1, "state": state, "requests": s.requests, "429": s.rate_limits, "errors": s.errors, "auth": s.auth_errors})
+        return result
+
+
+class RateLimiter:
+    def __init__(self, config: dict[str, Any]):
+        self.config = config
+        self.lock = threading.Lock()
+        self.last_request = 0.0
+
+    def wait(self) -> None:
+        with self.lock:
+            minimum = max(0.0, float(self.config.get("api_min_interval", 8)))
+            remaining = minimum - (time.monotonic() - self.last_request)
+            if remaining > 0:
+                time.sleep(remaining)
+            self.last_request = time.monotonic()
+
+    @staticmethod
+    def backoff(seconds: float, reason: str) -> None:
+        seconds = max(0.0, seconds)
+        if seconds <= 0:
+            return
+        print(f"[NEXUS] {reason}: aguardando {seconds:.1f}s")
+        time.sleep(seconds)
+
+
+class GeminiClient:
+    def __init__(self, config: dict[str, Any], limiter: RateLimiter, key_pool: KeyPool):
+        self.config = config
+        self.limiter = limiter
+        self.key_pool = key_pool
+        self.session = requests.Session()
+        self.session.headers.update({"User-Agent": f"NEXUS-TERMINAL/{APP_VERSION}"})
+
+    def ask(self, agent_id: str, state: dict[str, Any]) -> str:
+        if agent_id not in AGENTS:
+            raise AgentError(f"Agente desconhecido: {agent_id}")
+        keys = self.key_pool.keys
+        if not keys:
+            raise AgentError("Nenhuma API key configurada. Use /setup ou NEXUS_GEMINI_KEY_1..N.")
+        request_state = json.dumps(state, ensure_ascii=False, separators=(",", ":"))
+        max_chars = int(self.config.get("request_max_chars", 12000))
+        request_state = request_state[:max_chars]
+        model = str(self.config.get("model", DEFAULT_MODEL)).strip()
+        url = GEMINI_URL.format(model=model)
+        payload = {
+            "system_instruction": {"parts": [{"text": PROMPTS[agent_id]}]},
+            "contents": [{"role": "user", "parts": [{"text": request_state}]}],
+            "generationConfig": {
+                "temperature": float(self.config.get("temperature", 0.1)),
+                "maxOutputTokens": int(self.config.get("max_output_tokens", 700)),
+                "candidateCount": 1,
+                "responseMimeType": "application/json",
+            },
+        }
+        # O failover é sempre ilimitado: percorre todas as chaves carregadas,
+        # uma por vez e em rotação sequencial. O campo antigo max_key_failover
+        # é ignorado para não limitar configurações criadas em versões antigas.
+        max_failover = len(keys)
+        max_retries = max(0, int(self.config.get("max_retries", 1)))
+        used: set[int] = set()
+
+        for _ in range(max_failover):
+            key_index, key = self.key_pool.next_key(used)
+            used.add(key_index)
+            print(f"[NEXUS] {AGENTS[agent_id]} → chave #{key_index + 1} → Gemini")
+            for retry in range(max_retries + 1):
+                self.limiter.wait()
+                try:
+                    response = self.session.post(
+                        url,
+                        headers={"Content-Type": "application/json", "x-goog-api-key": key},
+                        json=payload,
+                        timeout=int(self.config.get("api_timeout", 60)),
+                    )
+                except requests.exceptions.Timeout:
+                    self.key_pool.mark_error(key_index)
+                    if retry < max_retries:
+                        self.limiter.backoff(2 ** retry, "Timeout")
+                        continue
+                    self.key_pool.mark_failed_this_task(key_index)
+                    break
+                except requests.exceptions.RequestException as exc:
+                    self.key_pool.mark_error(key_index)
+                    if retry < max_retries:
+                        self.limiter.backoff(2 ** retry, "Erro de rede")
+                        continue
+                    self.key_pool.mark_failed_this_task(key_index)
+                    break
+
+                if response.status_code == 429:
+                    retry_after = response.headers.get("Retry-After")
+                    try:
+                        seconds = int(retry_after) if retry_after else None
+                    except ValueError:
+                        seconds = None
+                    self.key_pool.mark_429(key_index, seconds)
+                    self.key_pool.mark_failed_this_task(key_index)
+                    print(f"[NEXUS] HTTP 429 na chave #{key_index + 1}; failover.")
+                    break
+
+                if response.status_code in (401, 403):
+                    self.key_pool.mark_auth_error(key_index)
+                    self.key_pool.mark_failed_this_task(key_index)
+                    print(f"[NEXUS] Chave #{key_index + 1} rejeitada HTTP {response.status_code}; isolada temporariamente.")
+                    break
+
+                if 500 <= response.status_code <= 599:
+                    self.key_pool.mark_error(key_index)
+                    if retry < max_retries:
+                        self.limiter.backoff(2 ** retry, f"Servidor HTTP {response.status_code}")
+                        continue
+                    self.key_pool.mark_failed_this_task(key_index)
+                    break
+
+                if response.status_code >= 400:
+                    body = response.text[:2500]
+                    raise AgentError(f"Gemini HTTP {response.status_code}:\n{body}")
+
+                try:
+                    data = response.json()
+                except ValueError as exc:
+                    raise AgentError(f"Resposta da API não é JSON: {exc}") from exc
+
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    feedback = data.get("promptFeedback")
+                    raise AgentError(f"Gemini retornou candidates vazio. Feedback: {feedback}")
+                parts = (candidates[0].get("content") or {}).get("parts") or []
+                result = "".join(str(p.get("text", "")) for p in parts if isinstance(p, dict)).strip()
+                if not result:
+                    raise AgentError("Gemini retornou resposta vazia.")
+                return result
+
+        raise RateLimitError("O pool não conseguiu atender a chamada após failover.")
+
+
+def extract_json(text: str) -> dict[str, Any]:
+    if not text:
+        raise AgentError("Resposta vazia do agente.")
+    raw = str(text).strip()
+    candidates = [raw]
+    cleaned = re.sub(r"^```(?:json)?\s*", "", raw, flags=re.I)
+    cleaned = re.sub(r"\s*```$", "", cleaned).strip()
+    candidates.append(cleaned)
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            pass
+    for i, char in enumerate(raw):
+        if char != "{":
+            continue
+        try:
+            obj, _ = decoder.raw_decode(raw[i:])
+            if isinstance(obj, dict):
+                return obj
+        except Exception:
+            continue
+    raise AgentError("O agente não retornou JSON válido:\n" + raw[:2500])
+
+
+GREETING_RESPONSES = {
+    "oi": "Olá! Estou operacional. Como posso ajudar?",
+    "olá": "Olá! Estou operacional. Como posso ajudar?",
+    "ola": "Olá! Estou operacional. Como posso ajudar?",
+    "oii": "Olá! Estou operacional. Como posso ajudar?",
+    "oie": "Olá! Estou operacional. Como posso ajudar?",
+    "hello": "Hello! NEXUS operacional.",
+    "hi": "Olá! NEXUS operacional.",
+    "bom dia": "Bom dia! NEXUS operacional. Como posso ajudar?",
+    "boa tarde": "Boa tarde! NEXUS operacional. Como posso ajudar?",
+    "boa noite": "Boa noite! NEXUS operacional. Como posso ajudar?",
+}
+
+DIRECT_COMMANDS = {
+    "onde estou": "pwd",
+    "qual meu diretório": "pwd",
+    "qual é meu diretório": "pwd",
+    "qual e meu diretorio": "pwd",
+    "mostre meu diretório": "pwd",
+    "liste os arquivos": "ls -lah",
+    "listar arquivos": "ls -lah",
+    "mostre os arquivos": "ls -lah",
+    "memória": "free -h",
+    "memoria": "free -h",
+    "mostre a memória": "free -h",
+    "mostre a memoria": "free -h",
+    "ram": "free -h",
+    "disco": "df -h /",
+    "espaço em disco": "df -h /",
+    "espaco em disco": "df -h /",
+    "kernel": "uname -a",
+    "qual o kernel": "uname -a",
+    "qual é o kernel": "uname -a",
+    "qual e o kernel": "uname -a",
+    "hostname": "hostname",
+    "qual meu usuário": "whoami",
+    "qual é meu usuário": "whoami",
+    "qual e meu usuario": "whoami",
+    "usuário": "whoami",
+    "usuario": "whoami",
+    "uptime": "uptime",
+    "processador": "lscpu",
+    "cpu": "lscpu",
+    "temperatura": "sensors",
+}
+
+CHANGE_PREFIXES = (
+    "instale ", "instalar ", "configure ", "configurar ", "crie ", "criar ",
+    "remova ", "remover ", "desinstale ", "desinstalar ", "adicione ", "adicionar ",
+    "corrija ", "corrigir ", "execute ", "executar ", "mate ", "inicie ", "iniciar ",
+    "pare ", "parar ", "edite ", "editar ", "monte ", "montar ",
+)
+
+COMPLEX_TERMS = (
+    "diagnóstico completo", "diagnostico completo", "analise tudo", "análise tudo",
+    "analise completa", "análise completa", "investigue", "investigar", "gargalo",
+    "problema do sistema", "problemas do sistema", "otimize meu sistema", "otimizar meu sistema",
+    "corrija meu sistema", "verifique tudo", "diagnóstico geral", "diagnostico geral",
+)
+
+
+def local_route(request: str) -> dict[str, Any]:
+    normalized = normalize_input(request)
+    if normalized in GREETING_RESPONSES:
+        return {"type": "conversation", "complexity": "direct", "api": 0, "response": GREETING_RESPONSES[normalized]}
+    if normalized in {"obrigado", "obrigada", "valeu", "vlw", "thanks"}:
+        return {"type": "conversation", "complexity": "direct", "api": 0, "response": "Disponha. NEXUS continua operacional."}
+    if normalized in {"quem é você", "quem e voce", "o que é você", "o que e voce"}:
+        return {"type": "conversation", "complexity": "direct", "api": 0, "response": "Sou o NEXUS TERMINAL, assistente Linux com PTY real e pipeline de agentes."}
+    if normalized in DIRECT_COMMANDS:
+        return {"type": "direct", "complexity": "direct", "api": 0, "command": DIRECT_COMMANDS[normalized]}
+    if any(word in normalized for word in COMPLEX_TERMS):
+        return {"type": "technical", "complexity": "complex", "api": 1}
+    if normalized.startswith(CHANGE_PREFIXES):
+        return {"type": "technical", "complexity": "medium", "api": 1}
+    return {"type": "technical", "complexity": "medium", "api": 1}
+
+
+class RealPTY:
+    def __init__(self) -> None:
+        self.shell = os.environ.get("SHELL") or "/bin/bash"
+        if not os.path.exists(self.shell):
+            self.shell = "/bin/bash"
+        self.child: Optional[pexpect.spawn] = None
+        self.output_queue: queue.Queue[bytes] = queue.Queue()
+        self.lock = threading.RLock()
+        self.alive = False
+        self.cwd = str(Path.home())
+
+    def start(self) -> None:
+        env = os.environ.copy()
+        env.update({"TERM": "xterm-256color", "NEXUS_TERMINAL": "1", "INPUTRC": "/dev/null"})
+        shell_name = Path(self.shell).name
+        args = ["--noprofile", "--norc", "-i"] if shell_name == "bash" else ["-i"]
+        self.child = pexpect.spawn(self.shell, args, env=env, encoding=None, echo=False, dimensions=(40, 120), timeout=0.1)
+        self.alive = True
+        threading.Thread(target=self._reader, daemon=True, name="nexus-pty-reader").start()
+        time.sleep(0.25)
+        if shell_name == "bash":
+            self.write("bind 'set enable-bracketed-paste off'\n")
+            self.write("printf '\\033[?2004l'\n")
+            self.write("PS1='\\u@\\h:\\w\\$ '\n")
+        time.sleep(0.2)
+        self.drain()
+        self.refresh_cwd()
+
+    def _reader(self) -> None:
+        while self.alive and self.child is not None:
+            try:
+                data = self.child.read_nonblocking(size=4096, timeout=0.1)
+                if data:
+                    self.output_queue.put(data)
+            except pexpect.TIMEOUT:
+                continue
+            except (pexpect.EOF, OSError):
+                break
+            except Exception as exc:
+                self.output_queue.put(f"\n[NEXUS PTY ERROR] {exc}\n".encode())
+                break
+        self.alive = False
+
+    def write(self, data: str | bytes) -> bool:
+        if not self.alive or self.child is None:
+            return False
+        try:
+            with self.lock:
+                self.child.write(data)
+            return True
+        except Exception:
+            return False
+
+    def drain(self) -> bytes:
+        chunks = []
+        while True:
+            try:
+                chunks.append(self.output_queue.get_nowait())
+            except queue.Empty:
+                break
+        return b"".join(chunks)
+
+    def run_command(self, command: str, timeout: int = 120) -> tuple[str, Optional[int]]:
+        command = clean_command(command)
+        if not command:
+            return "", None
+        marker = f"__NEXUS_EXIT_{uuid.uuid4().hex}__"
+        payload = f"{command}\nprintf '\\n{marker}:%s\\n' $?\n"
+        self.drain()
+        if not self.write(payload):
+            return "", None
+        captured = b""
+        deadline = time.monotonic() + max(1, timeout)
+        pattern = re.compile(rb"\n" + re.escape(marker.encode()) + rb":(-?\d+)\r?\n")
+        while time.monotonic() < deadline:
+            captured += self.drain()
+            match = pattern.search(captured)
+            if match:
+                code = int(match.group(1))
+                output = self.clean_command_output(captured[:match.start()], command, marker)
+                self.refresh_cwd()
+                return output, code
+            time.sleep(0.03)
+        self.write("\x03")
+        return self.clean_output(captured), None
+
+    def refresh_cwd(self) -> None:
+        if not self.alive:
+            return
+        marker = f"__NEXUS_PWD_{uuid.uuid4().hex}__"
+        self.drain()
+        self.write(f"pwd\nprintf '\\n{marker}\\n'\n")
+        captured = b""
+        deadline = time.monotonic() + 3
+        pattern = re.compile(rb"\r?\n(.*?)\r?\n" + re.escape(marker.encode()))
+        while time.monotonic() < deadline:
+            captured += self.drain()
+            match = pattern.search(captured)
+            if match:
+                value = match.group(1).decode("utf-8", errors="replace").strip()
+                if value.startswith("/"):
+                    self.cwd = value
+                return
+            time.sleep(0.03)
+
+    @staticmethod
+    def clean_output(data: bytes) -> str:
+        return clean_text(data.decode("utf-8", errors="replace")) if data else ""
+
+    @classmethod
+    def clean_command_output(cls, data: bytes, command: str, marker: str) -> str:
+        """Remove eco do shell e o printf interno, preservando a saída real."""
+        text = cls.clean_output(data)
+        lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            if marker in line or "printf '\\n__NEXUS_EXIT_" in line:
+                continue
+            if stripped.startswith(">"):
+                continue
+            if stripped == command.strip():
+                continue
+            if re.match(r"^[^\n]*@[^\n:]+:.*(?:\$|#)$", stripped):
+                continue
+            lines.append(line)
+        return "\n".join(lines).strip()
+
+    def interrupt(self) -> None:
+        if self.alive:
+            self.write("\x03")
+
+    def stop(self) -> None:
+        self.alive = False
+        try:
+            if self.child is not None:
+                self.child.close(force=True)
+        except Exception:
+            pass
+
+
+class NexusCompleter:
+    COMMANDS = [
+        "/nexus", "/nexus --auto", "/nexus --fast", "/nexus --auto --fast",
+        "/nexus stop", "/status", "/config", "/keys", "/reset-limits",
+        "/setup", "/self-test", "/help", "/clear", "/exit",
+    ]
+
+    def __init__(self, app: "NexusApp"):
+        self.app = app
+        self.command_cache: Optional[list[str]] = None
+
+    def build_command_cache(self) -> list[str]:
+        if self.command_cache is not None:
+            return self.command_cache
+        commands: set[str] = set()
+        for directory in os.environ.get("PATH", "").split(os.pathsep):
+            if not directory:
+                continue
+            try:
+                for item in Path(directory).iterdir():
+                    if item.is_file() and os.access(item, os.X_OK):
+                        commands.add(item.name)
+            except (OSError, PermissionError):
+                continue
+        self.command_cache = sorted(commands)
+        return self.command_cache
+
+    def complete(self, text: str, state: int) -> Optional[str]:
+        buffer = readline.get_line_buffer()
+        if buffer.startswith("/"):
+            options = [x for x in self.COMMANDS if x.startswith(buffer)]
+        elif len(buffer[:readline.get_endidx()].strip().split()) <= 1:
+            options = [x for x in self.build_command_cache() if x.startswith(text)]
+        else:
+            return self.complete_path(text, state)
+        return options[state] if state < len(options) else None
+
+    def complete_path(self, text: str, state: int) -> Optional[str]:
+        if not text:
+            text = ""
+        expanded = os.path.expanduser(text)
+        path = Path(expanded)
+        if text.endswith(os.sep):
+            directory, prefix = path, ""
+        else:
+            directory, prefix = path.parent, path.name
+        try:
+            items = sorted(directory.iterdir(), key=lambda p: p.name.lower())
+        except (OSError, PermissionError):
+            return None
+        options = []
+        for item in items:
+            if not item.name.startswith(prefix):
+                continue
+            if text in ("", "."):
+                value = item.name
+            else:
+                value = str(path.parent / item.name)
+            if item.is_dir():
+                value += os.sep
+            options.append(value)
+        return options[state] if state < len(options) else None
+
+
+def setup_readline(app: "NexusApp") -> None:
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    try:
+        readline.set_history_length(1000)
+        if HISTORY_FILE.exists():
+            readline.read_history_file(str(HISTORY_FILE))
+    except Exception:
+        pass
+    readline.set_completer(NexusCompleter(app).complete)
+    readline.parse_and_bind("tab: complete")
+    readline.parse_and_bind("set show-all-if-ambiguous on")
+    readline.set_completer_delims(" \t\n;")
+
+
+def save_history() -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        readline.write_history_file(str(HISTORY_FILE))
+        os.chmod(HISTORY_FILE, 0o600)
+    except Exception:
         pass
 
 
-def load_config():
-
-    CONFIG_DIR.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    cfg = DEFAULT_CONFIG.copy()
-
-    if CONFIG_FILE.exists():
-
-        try:
-
-            raw = CONFIG_FILE.read_text(
-                encoding="utf-8"
-            )
-
-            data = json.loads(
-                raw
-            )
-
-            if isinstance(
-                data,
-                dict,
-            ):
-
-                cfg.update(
-                    data
-                )
-
-        except Exception as exc:
-
-            print()
-            print(
-                "[NEXUS] Erro lendo configuração:"
-            )
-
-            print(
-                exc
-            )
-
-            print(
-                "[NEXUS] "
-                "Usando configuração padrão."
-            )
-
-    # --------------------------------------------------------
-    # FORÇAR GEMINI
-    # --------------------------------------------------------
-
-    cfg[
-        "provider"
-    ] = "gemini"
-
-    # --------------------------------------------------------
-    # REMOVER URL ANTIGA
-    # --------------------------------------------------------
-
-    cfg.pop(
-        "api_url",
-        None,
-    )
-
-    # --------------------------------------------------------
-    # API KEY
-    # --------------------------------------------------------
-
-    configured_key = normalize_api_key(
-        cfg.get(
-            "api_key",
-            "",
-        )
-    )
-
-    environment_key = normalize_api_key(
-        os.environ.get(
-            "GEMINI_API_KEY",
-            "",
-        )
-    )
-
-    if environment_key:
-
-        cfg[
-            "api_key"
-        ] = environment_key
-
-    else:
-
-        cfg[
-            "api_key"
-        ] = configured_key
-
-    # --------------------------------------------------------
-    # MODELO
-    # --------------------------------------------------------
-
-    model = clean_terminal_input(
-        cfg.get(
-            "model",
-            DEFAULT_CONFIG["model"],
-        )
-    )
-
-    if not model:
-
-        model = DEFAULT_CONFIG[
-            "model"
-        ]
-
-    cfg[
-        "model"
-    ] = model
-
-    # --------------------------------------------------------
-    # GARANTIR CONFIGURAÇÃO LIMPA
-    # --------------------------------------------------------
-
-    save_config(
-        cfg
-    )
-
-    return cfg
-
-
-# ============================================================
-# URL GEMINI
-# ============================================================
-
-def build_gemini_url(model):
-
-    model = clean_terminal_input(
-        model
-    )
-
-    return (
-        "https://generativelanguage.googleapis.com/"
-        "v1beta/models/"
-        + model
-        + ":generateContent"
-    )
-
-
-# ============================================================
-# CONFIGURE
-# ============================================================
-
-def configure():
-
-    cfg = load_config()
-
-    print()
-    print(
-        "=============================================="
-    )
-    print(
-        "              NEXUS GEMINI CONFIG"
-    )
-    print(
-        "=============================================="
-    )
-
-    print()
-
-    print(
-        "Arquivo:"
-    )
-
-    print(
-        CONFIG_FILE
-    )
-
-    print()
-
-    print(
-        "Provider: Google Gemini"
-    )
-
-    # --------------------------------------------------------
-    # MODEL
-    # --------------------------------------------------------
-
-    current_model = cfg.get(
-        "model",
-        DEFAULT_CONFIG["model"],
-    )
-
-    model = input(
-        f"Modelo [{current_model}]: "
-    )
-
-    model = clean_terminal_input(
-        model
-    )
-
-    if model:
-
-        cfg[
-            "model"
-        ] = model
-
-    # --------------------------------------------------------
-    # API KEY
-    # --------------------------------------------------------
-
-    print()
-
-    print(
-        "API key."
-    )
-
-    print(
-        "Enter mantém a atual."
-    )
-
-    print(
-        "- remove a chave."
-    )
-
-    print()
-
-    key = input(
-        "Gemini API key: "
-    )
-
-    key = normalize_api_key(
-        key
-    )
-
-    if key == "-":
-
-        cfg[
-            "api_key"
-        ] = ""
-
-    elif key:
-
-        cfg[
-            "api_key"
-        ] = key
-
-    # --------------------------------------------------------
-    # TEMPERATURE
-    # --------------------------------------------------------
-
-    current_temperature = cfg.get(
-        "temperature",
-        0.2,
-    )
-
-    temperature = input(
-        f"Temperature [{current_temperature}]: "
-    )
-
-    temperature = clean_terminal_input(
-        temperature
-    )
-
-    if temperature:
-
-        try:
-
-            value = float(
-                temperature
-            )
-
-            if value < 0:
-                value = 0
-
-            if value > 2:
-                value = 2
-
-            cfg[
-                "temperature"
-            ] = value
-
-        except ValueError:
-
-            print(
-                "Temperature inválida."
-            )
-
-    # --------------------------------------------------------
-    # MAX TOKENS
-    # --------------------------------------------------------
-
-    current_tokens = cfg.get(
-        "max_output_tokens",
-        4096,
-    )
-
-    tokens = input(
-        f"Max output tokens [{current_tokens}]: "
-    )
-
-    tokens = clean_terminal_input(
-        tokens
-    )
-
-    if tokens:
-
-        try:
-
-            cfg[
-                "max_output_tokens"
-            ] = max(
-                1,
-                int(tokens),
-            )
-
-        except ValueError:
-
-            print(
-                "Valor inválido."
-            )
-
-    # --------------------------------------------------------
-    # REMOVER API URL ANTIGA
-    # --------------------------------------------------------
-
-    cfg.pop(
-        "api_url",
-        None,
-    )
-
-    # --------------------------------------------------------
-    # SALVAR
-    # --------------------------------------------------------
-
-    save_config(
-        cfg
-    )
-
-    print()
-
-    print(
-        "Configuração Gemini salva."
-    )
-
-    print(
-        f"Provider: Google Gemini"
-    )
-
-    print(
-        f"Modelo:   {cfg['model']}"
-    )
-
-    print(
-        f"URL:      {build_gemini_url(cfg['model'])}"
-    )
-
-    if cfg.get(
-        "api_key"
-    ):
-
-        key = cfg[
-            "api_key"
-        ]
-
-        if len(key) > 12:
-
-            masked = (
-                key[:6]
-                + "..."
-                + key[-4:]
-            )
-
-        else:
-
-            masked = "***"
-
-        print(
-            f"API key:  {masked}"
-        )
-
-    else:
-
-        print(
-            "API key:  NÃO CONFIGURADA"
-        )
-
-    print()
-
-
-# ============================================================
-# PTY LINUX REAL
-# ============================================================
-
-class RealPTY:
-
-    def __init__(self):
-
-        self.shell = (
-            os.environ.get(
-                "SHELL"
-            )
-            or "/bin/bash"
-        )
-
-        if not os.path.exists(
-            self.shell
-        ):
-
-            self.shell = "/bin/bash"
-
-        self.child = None
-
-        self.lock = threading.RLock()
-
-        self.output_queue = queue.Queue()
-
-        self.reader_thread = None
-
-        self.alive = False
-
-    # ========================================================
-    # START
-    # ========================================================
-
-    def start(self):
-
-        env = os.environ.copy()
-
-        # ----------------------------------------------------
-        # TERMINAL
-        # ----------------------------------------------------
-
-        env[
-            "TERM"
-        ] = "xterm-256color"
-
-        env[
-            "NEXUS_TERMINAL"
-        ] = "1"
-
-        # ----------------------------------------------------
-        # DESABILITAR BRACKETED PASTE DO READLINE
-        # ----------------------------------------------------
-
-        env[
-            "INPUTRC"
-        ] = "/dev/null"
-
-        # ----------------------------------------------------
-        # SPAWN
-        # ----------------------------------------------------
-
-        self.child = pexpect.spawn(
-
-            self.shell,
-
-            [
-                "--noprofile",
-                "--norc",
-                "-i",
-            ],
-
-            env=env,
-
-            encoding=None,
-
-            echo=True,
-
-            dimensions=(
-                40,
-                120,
-            ),
-
-            timeout=0.1,
-        )
-
-        self.alive = True
-
-        self.reader_thread = threading.Thread(
-
-            target=self._reader,
-
-            daemon=True,
-        )
-
-        self.reader_thread.start()
-
-        # ----------------------------------------------------
-        # CONFIGURAR BASH
-        # ----------------------------------------------------
-
-        time.sleep(
-            0.1
-        )
-
-        self._send_control_command(
-            "bind 'set enable-bracketed-paste off'"
-        )
-
-        self._send_control_command(
-            "printf '\\033[?2004l'"
-        )
-
-        # ----------------------------------------------------
-        # PROMPT LIMPO
-        # ----------------------------------------------------
-
-        self._send_control_command(
-            "PS1='\\u@\\h:\\w\\$ '"
-        )
-
-        # ----------------------------------------------------
-        # LIMPAR SAÍDA INICIAL
-        # ----------------------------------------------------
-
-        time.sleep(
-            0.1
-        )
-
-        self.drain()
-
-    # ========================================================
-    # CONTROLE INTERNO
-    # ========================================================
-
-    def _send_control_command(
-        self,
-        command,
-    ):
-
-        if (
-            self.child is None
-            or not self.alive
-        ):
-
-            return
-
-        try:
-
-            with self.lock:
-
-                self.child.write(
-                    command
-                    + "\n"
-                )
-
-        except Exception:
-
-            pass
-
-    # ========================================================
-    # READER
-    # ========================================================
-
-    def _reader(self):
-
-        while (
-            self.alive
-            and self.child is not None
-        ):
-
-            try:
-
-                data = (
-                    self.child.read_nonblocking(
-
-                        size=4096,
-
-                        timeout=0.1,
-                    )
-                )
-
-                if data:
-
-                    self.output_queue.put(
-                        data
-                    )
-
-            except pexpect.TIMEOUT:
-
-                continue
-
-            except (
-                pexpect.EOF,
-                OSError,
-            ):
-
-                break
-
-            except Exception as exc:
-
-                self.output_queue.put(
-
-                    (
-                        "\n"
-                        "[NEXUS PTY ERROR] "
-                        f"{exc}\n"
-                    ).encode()
-                )
-
-                break
-
-        self.alive = False
-
-    # ========================================================
-    # WRITE
-    # ========================================================
-
-    def write(
-        self,
-        data,
-    ):
-
-        if (
-            not self.alive
-            or self.child is None
-        ):
-
-            return False
-
-        try:
-
-            # ------------------------------------------------
-            # NORMALIZAR INPUT
-            # ------------------------------------------------
-
-            data = clean_shell_input(
-                data
-            )
-
-            with self.lock:
-
-                self.child.write(
-                    data
-                )
-
+class NexusApp:
+    def __init__(self) -> None:
+        self.config = load_config()
+        self.pty = RealPTY()
+        self.key_pool = KeyPool(self.config)
+        self.limiter = RateLimiter(self.config)
+        self.ai = GeminiClient(self.config, self.limiter, self.key_pool)
+        self.running = True
+        self.stop_event = threading.Event()
+        self.task_id = 0
+        self.current_task_calls = 0
+        self.current_budget = 0
+        self.last_output = ""
+        self.last_exit: Optional[int] = None
+        self.auto_mode = False
+
+    def terminal_state(self) -> dict[str, Any]:
+        limit = int(self.config.get("max_output_chars", 6000))
+        return {"cwd": self.pty.cwd, "shell": self.pty.shell, "last_exit_code": self.last_exit, "last_output": self.last_output[-limit:]}
+
+    def can_call_api(self) -> bool:
+        return self.current_task_calls < self.current_budget
+
+    def call_agent(self, agent_id: str, state: dict[str, Any]) -> dict[str, Any]:
+        if not self.can_call_api():
+            raise AgentError("Orçamento de API da tarefa atingido.")
+        self.current_task_calls += 1
+        print(f"\n┌──────────────────────────────────────┐\n│ {AGENTS[agent_id]:<36} │\n└──────────────────────────────────────┘")
+        print(f"[NEXUS] API {self.current_task_calls}/{self.current_budget}")
+        return extract_json(self.ai.ask(agent_id, state))
+
+    def execute_command(self, command: str) -> tuple[str, Optional[int], bool]:
+        command = clean_command(command)
+        if not command:
+            return "", None, False
+        print(f"\n\033[1;36mWHITE RAT → \033[0m{command}")
+        if is_dangerous(command) and self.config.get("dangerous_always_confirm", True):
+            print("\033[1;31mCOMANDO POTENCIALMENTE PERIGOSO\033[0m")
+            answer = input("Executar mesmo assim? [sim/N]: ").strip().lower()
+            if answer not in {"sim", "s", "yes", "y"}:
+                print("[NEXUS] Comando cancelado.")
+                return "", None, False
+        output, code = self.pty.run_command(command, int(self.config.get("terminal_timeout", 120)))
+        self.last_output, self.last_exit = output, code
+        if output:
+            print(f"\n{output}")
+        print(f"\n[exit code: {code}]")
+        cooldown = int(self.config.get("execution_cooldown", 1))
+        if cooldown:
+            time.sleep(cooldown)
+        return output, code, True
+
+    def confirm_command(self, command: str) -> bool:
+        if self.auto_mode and not is_dangerous(command):
             return True
-
-        except Exception as exc:
-
-            print()
-            print(
-                "[NEXUS] "
-                "Erro escrevendo no PTY:"
-            )
-
-            print(
-                exc
-            )
-
+        print("\nExecutar:\n  " + command)
+        answer = input("[s]im [n]ão [a]uto [x]parar: ").strip().lower()
+        if answer in {"x", "stop"}:
+            self.stop_event.set()
+            self.pty.interrupt()
             return False
+        if answer in {"a", "auto"}:
+            self.auto_mode = True
+            return not is_dangerous(command)
+        return answer in {"s", "sim", "y", "yes"}
 
-    # ========================================================
-    # RESIZE
-    # ========================================================
+    def run_local_command(self, command: str) -> None:
+        print("\n[NEXUS] ROTEADOR LOCAL → 0 API")
+        output, code, executed = self.execute_command(command)
+        if executed:
+            print("\n\033[1;35mWHITE RAT:\033[0m")
+            print(output if output else f"Comando concluído. exit code={code}")
 
-    def resize(
-        self,
-        rows,
-        cols,
-    ):
+    def run_technical(self, request: str, mode: str, complexity: str, fast: bool = False) -> None:
+        # Cada pedido técnico consome exatamente uma chamada lógica.
+        # O GeminiClient só usa outra chave se a chave atual falhar.
+        self.current_budget = 1
+        state = {
+            "user_request": request,
+            "terminal": self.terminal_state(),
+            "mode": mode,
+            "complexity": complexity,
+        }
+        answer = self.call_agent("unica", state)
+        response = clean_text(answer.get("response", ""))
+        command = clean_command(answer.get("command", ""))
 
-        if self.child is None:
-
+        if command:
+            if not self.confirm_command(command):
+                return
+            output, code, executed = self.execute_command(command)
+            if executed:
+                print("\n\033[1;35mWHITE RAT:\033[0m")
+                print(output if output else f"Comando concluído. exit code={code}")
             return
 
-        try:
-
-            self.child.setwinsize(
-                rows,
-                cols,
-            )
-
-        except Exception:
-
-            pass
-
-    # ========================================================
-    # DRAIN
-    # ========================================================
-
-    def drain(self):
-
-        chunks = []
-
-        while True:
-
-            try:
-
-                chunks.append(
-                    self.output_queue.get_nowait()
-                )
-
-            except queue.Empty:
-
-                break
-
-        if not chunks:
-
-            return b""
-
-        data = b"".join(
-            chunks
-        )
-
-        return data
-
-    # ========================================================
-    # RUN COMMAND
-    # ========================================================
-
-    def run_command_and_capture(
-        self,
-        command,
-        timeout=120,
-    ):
-
-        command = clean_shell_input(
-            command
-        )
-
-        marker = (
-            "__NEXUS_EXIT_"
-            + str(os.getpid())
-            + "_"
-            + str(time.time_ns())
-            + "__"
-        )
-
-        # ----------------------------------------------------
-        # COMMAND
-        # ----------------------------------------------------
-
-        payload = (
-            command
-            + "\n"
-            + "printf '\\n"
-            + marker
-            + ":%s\\n' $?\n"
-        )
-
-        # ----------------------------------------------------
-        # LIMPAR BUFFER
-        # ----------------------------------------------------
-
-        self.drain()
-
-        # ----------------------------------------------------
-        # ENVIAR
-        # ----------------------------------------------------
-
-        self.write(
-            payload
-        )
-
-        captured = b""
-
-        deadline = (
-            time.time()
-            + timeout
-        )
-
-        pattern = re.compile(
-
-            rb"\n"
-            + re.escape(
-                marker.encode()
-            )
-            + rb":(-?\d+)\r?\n"
-        )
-
-        # ----------------------------------------------------
-        # CAPTURAR
-        # ----------------------------------------------------
-
-        while (
-            time.time()
-            < deadline
-        ):
-
-            captured += self.drain()
-
-            match = pattern.search(
-                captured
-            )
-
-            if match:
-
-                exit_code = int(
-                    match.group(1)
-                )
-
-                output = (
-                    captured[
-                        :match.start()
-                    ]
-                )
-
-                # ------------------------------------------------
-                # LIMPEZA DE ESCAPES
-                # ------------------------------------------------
-
-                output = self.clean_output(
-                    output
-                )
-
-                return (
-                    output,
-                    exit_code,
-                )
-
-            time.sleep(
-                0.03
-            )
-
-        captured = self.clean_output(
-            captured
-        )
-
-        return (
-            captured,
-            None,
-        )
-
-    # ========================================================
-    # CLEAN OUTPUT
-    # ========================================================
+        if response:
+            print(f"\n\033[1;35mWHITE RAT:\033[0m\n{response}")
+        else:
+            raise AgentError("A API não retornou response nem command.")
 
     @staticmethod
-    def clean_output(
-        data,
-    ):
+    def print_conclusion(conclusion: dict[str, Any]) -> None:
+        print(f"\n\033[1;35mWHITE RAT:\033[0m {conclusion.get('message', 'Tarefa concluída.')}")
 
-        if not data:
+    def process_nexus(self, line: str) -> None:
+        raw = line[len("/nexus"):].strip()
+        if not raw:
+            print("Uso: /nexus [--auto] [--fast] <tarefa>")
+            return
+        if raw == "stop":
+            self.stop_event.set(); self.pty.interrupt(); print("[NEXUS] Parada solicitada."); return
 
-            return b""
+        tokens = raw.split()
+        mode_auto = False
+        fast = False
+        while tokens and tokens[0] in {"--auto", "--fast"}:
+            token = tokens.pop(0)
+            mode_auto |= token == "--auto"
+            fast |= token == "--fast"
+        # Aceita também flags depois de outra flag e remove todas as ocorrências iniciais.
+        while tokens and tokens[-1] in {"--auto", "--fast"}:
+            token = tokens.pop()
+            mode_auto |= token == "--auto"
+            fast |= token == "--fast"
+        raw = " ".join(tokens).strip()
+        if not raw:
+            print("Informe a tarefa.")
+            return
 
+        self.auto_mode = mode_auto
+        self.stop_event.clear()
+        self.task_id += 1
+        print(f"\n{'=' * 56}\nNEXUS TASK #{self.task_id}\n{'=' * 56}")
+        route = local_route(raw)
+        print(f"[NEXUS] Roteamento local: {route['type'].upper()}")
+        print(f"[NEXUS] Complexidade: {route['complexity'].upper()}")
+        print(f"[NEXUS] APIs planejadas: {route['api']}")
+        if route["type"] == "conversation":
+            print(f"\n\033[1;35mWHITE RAT:\033[0m\n{route['response']}")
+            return
+        if route["type"] == "direct":
+            self.run_local_command(route["command"])
+            return
+        self.key_pool.begin_task()
+        self.current_task_calls = 0
         try:
-
-            text = data.decode(
-                "utf-8",
-                errors="replace",
-            )
-
-        except Exception:
-
-            return data
-
-        # ----------------------------------------------------
-        # BRACKETED PASTE
-        # ----------------------------------------------------
-
-        text = text.replace(
-            "\x1b[200~",
-            "",
-        )
-
-        text = text.replace(
-            "\x1b[201~",
-            "",
-        )
-
-        # ----------------------------------------------------
-        # REMOVER CÓDIGOS ANSI DE CONTROLE
-        # ----------------------------------------------------
-
-        text = ANSI_ESCAPE_RE.sub(
-            "",
-            text,
-        )
-
-        return text.encode(
-            "utf-8",
-            errors="replace",
-        )
-
-    # ========================================================
-    # STOP
-    # ========================================================
-
-    def stop(self):
-
-        self.alive = False
-
-        try:
-
-            if self.child is not None:
-
-                self.child.close(
-                    force=True
-                )
-
-        except Exception:
-
-            pass
-
-
-# ============================================================
-# GEMINI AI PROVIDER
-# ============================================================
-
-class AIProvider:
-
-    def __init__(
-        self,
-        config,
-    ):
-
-        self.config = config
-
-    # ========================================================
-    # ASK
-    # ========================================================
-
-    def ask(
-        self,
-        user_message,
-        context,
-    ):
-
-        # ----------------------------------------------------
-        # API KEY
-        # ----------------------------------------------------
-
-        key = normalize_api_key(
-            self.config.get(
-                "api_key",
-                "",
-            )
-        )
-
-        if not key:
-
-            key = normalize_api_key(
-                os.environ.get(
-                    "GEMINI_API_KEY",
-                    "",
-                )
-            )
-
-        if not key:
-
-            raise RuntimeError(
-
-                "Gemini API key "
-                "não configurada.\n\n"
-
-                "Configure com:\n"
-
-                "export GEMINI_API_KEY="
-                "\"SUA_CHAVE\"\n\n"
-
-                "ou use:\n"
-                "/config"
-            )
-
-        # ----------------------------------------------------
-        # MODEL
-        # ----------------------------------------------------
-
-        model = clean_terminal_input(
-            self.config.get(
-                "model",
-                DEFAULT_CONFIG["model"],
-            )
-        )
-
-        if not model:
-
-            model = DEFAULT_CONFIG[
-                "model"
-            ]
-
-        # ----------------------------------------------------
-        # URL FIXA
-        # ----------------------------------------------------
-
-        api_url = build_gemini_url(
-            model
-        )
-
-        # ----------------------------------------------------
-        # SYSTEM
-        # ----------------------------------------------------
-
-        system_instruction = (
-
-            SYSTEM_PROMPT
-
-            + "\n\n"
-
-            + "CONTEXTO ATUAL DO TERMINAL:\n"
-
-            + json.dumps(
-                context,
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
-
-        # ----------------------------------------------------
-        # CONTENTS
-        # ----------------------------------------------------
-
-        contents = [
-
-            {
-                "role": "user",
-
-                "parts": [
-
-                    {
-                        "text": user_message
-                    }
-
-                ],
-            }
-
-        ]
-
-        # ----------------------------------------------------
-        # PAYLOAD
-        # ----------------------------------------------------
-
-        payload = {
-
-            "system_instruction": {
-
-                "parts": [
-
-                    {
-                        "text":
-                            system_instruction
-                    }
-
-                ]
-
-            },
-
-            "contents": contents,
-
-            "generationConfig": {
-
-                "temperature": float(
-
-                    self.config.get(
-                        "temperature",
-                        0.2,
-                    )
-
-                ),
-
-                "maxOutputTokens": int(
-
-                    self.config.get(
-                        "max_output_tokens",
-                        4096,
-                    )
-
-                ),
-
-                "candidateCount": 1,
-            },
-        }
-
-        # ----------------------------------------------------
-        # HEADERS
-        # ----------------------------------------------------
-
-        headers = {
-
-            "Content-Type":
-                "application/json",
-
-            "x-goog-api-key":
-                key,
-        }
-
-        # ----------------------------------------------------
-        # LOG
-        # ----------------------------------------------------
-
-        print()
-
-        print(
-            "[NEXUS] Consultando Gemini..."
-        )
-
-        print(
-            f"[NEXUS] Model: {model}"
-        )
-
-        # ----------------------------------------------------
-        # REQUEST
-        # ----------------------------------------------------
-
-        try:
-
-            response = requests.post(
-
-                api_url,
-
-                headers=headers,
-
-                json=payload,
-
-                timeout=120,
-            )
-
-        except requests.exceptions.Timeout:
-
-            raise RuntimeError(
-
-                "Timeout: o Gemini não "
-                "respondeu em 120 segundos."
-            )
-
-        except requests.exceptions.ConnectionError as exc:
-
-            raise RuntimeError(
-
-                "Erro de conexão com Gemini:\n"
-                + str(exc)
-            )
-
-        except requests.exceptions.RequestException as exc:
-
-            raise RuntimeError(
-
-                "Erro de comunicação com Gemini:\n"
-                + str(exc)
-            )
-
-        # ----------------------------------------------------
-        # HTTP ERROR
-        # ----------------------------------------------------
-
-        if response.status_code >= 400:
-
-            try:
-
-                error_data = response.json()
-
-                error_text = json.dumps(
-
-                    error_data,
-
-                    ensure_ascii=False,
-
-                    indent=2,
-                )
-
-            except Exception:
-
-                error_text = (
-
-                    response.text
-
-                    or "(resposta vazia)"
-                )
-
-            raise RuntimeError(
-
-                "Gemini retornou HTTP "
-
-                + str(
-                    response.status_code
-                )
-
-                + ":\n"
-
-                + error_text[:10000]
-            )
-
-        # ----------------------------------------------------
-        # JSON
-        # ----------------------------------------------------
-
-        try:
-
-            data = response.json()
-
-        except Exception:
-
-            raise RuntimeError(
-
-                "Gemini respondeu algo "
-                "que não é JSON:\n"
-
-                + response.text[:10000]
-            )
-
-        # ----------------------------------------------------
-        # EXTRAR TEXTO
-        # ----------------------------------------------------
-
-        try:
-
-            candidates = data.get(
-                "candidates",
-                []
-            )
-
-            if not candidates:
-
-                raise RuntimeError(
-
-                    "Gemini retornou "
-                    "candidates vazio:\n"
-
-                    + json.dumps(
-
-                        data,
-
-                        ensure_ascii=False,
-
-                        indent=2,
-                    )[:10000]
-                )
-
-            candidate = candidates[0]
-
-            content = candidate.get(
-                "content",
-                {}
-            )
-
-            parts = content.get(
-                "parts",
-                []
-            )
-
-            text_parts = []
-
-            for part in parts:
-
-                if not isinstance(
-                    part,
-                    dict,
-                ):
-
-                    continue
-
-                text = part.get(
-                    "text"
-                )
-
-                if text:
-
-                    text_parts.append(
-                        str(text)
-                    )
-
-            result = "\n".join(
-                text_parts
-            ).strip()
-
-            if not result:
-
-                raise RuntimeError(
-
-                    "Gemini não "
-                    "retornou texto:\n"
-
-                    + json.dumps(
-
-                        data,
-
-                        ensure_ascii=False,
-
-                        indent=2,
-                    )[:10000]
-                )
-
-            return result
-
-        except RuntimeError:
-
-            raise
-
-        except Exception as exc:
-
-            raise RuntimeError(
-
-                "Erro interpretando "
-                "resposta do Gemini:\n"
-
-                + str(exc)
-
-                + "\n\nResposta:\n"
-
-                + json.dumps(
-
-                    data,
-
-                    ensure_ascii=False,
-
-                    indent=2,
-                )[:10000]
-            )
-
-
-# ============================================================
-# ACTION PARSER
-# ============================================================
-
-def extract_actions(
-    text,
-):
-
-    actions = []
-
-    pattern = re.compile(
-
-        r"<ACTION>\s*(.*?)\s*</ACTION>",
-
-        re.DOTALL
-        | re.IGNORECASE,
-    )
-
-    for match in pattern.finditer(
-        text
-    ):
-
-        raw = (
-            match.group(1)
-            .strip()
-        )
-
-        try:
-
-            obj = json.loads(
-                raw
-            )
-
-            command = obj.get(
-                "command"
-            )
-
-            if (
-                isinstance(
-                    command,
-                    str,
-                )
-                and command.strip()
-            ):
-
-                actions.append(
-                    command.strip()
-                )
-
-        except json.JSONDecodeError:
-
-            continue
-
-    return actions
-
-
-# ============================================================
-# SEGURANÇA
-# ============================================================
-
-def is_dangerous(
-    command,
-):
-
-    normalized = (
-        command
-        .lower()
-        .strip()
-    )
-
-    dangerous_patterns = [
-
-        r"\brm\s+(-[a-z]*f[a-z]*\s+)?/",
-
-        r"\brm\s+-rf\s+\*",
-
-        r"\brm\s+-fr\s+\*",
-
-        r"\bmkfs(\.|$)",
-
-        r"\bdd\s+.*\bof=/dev/",
-
-        r"\bparted\b",
-
-        r"\bfdisk\b",
-
-        r"\bformat\b",
-
-        r"\bshutdown\b",
-
-        r"\breboot\b",
-
-        r"\bpoweroff\b",
-
-        r":\(\)\s*\{",
-    ]
-
-    return any(
-
-        re.search(
-            pattern,
-            normalized,
-        )
-
-        for pattern
-        in dangerous_patterns
-    )
-
-
-# ============================================================
-# NEXUS APPLICATION
-# ============================================================
-
-class NexusApp:
-
-    def __init__(self):
-
-        self.config = load_config()
-
-        self.pty = RealPTY()
-
-        self.ai = AIProvider(
-            self.config
-        )
-
-        self.running = True
-
-        self.auto = False
-
-        self.assist = False
-
-        self.last_output = ""
-
-        self.last_exit = None
-
-        self.agent_stop = threading.Event()
-
-    # ========================================================
-    # BANNER
-    # ========================================================
-
-    def print_banner(
-        self,
-    ):
-
-        print(
-            """
-╔══════════════════════════════════════════════════════════╗
-║                    NEXUS TERMINAL                       ║
-║                      WHITE RAT                          ║
-║                                                          ║
-║  Linux PTY REAL  •  Gemini API  •  AI Agent             ║
-╚══════════════════════════════════════════════════════════╝
-
-Shell : {shell}
-CWD   : {cwd}
-AI    : Google Gemini
-
-Comandos NEXUS:
-
-  /nexus <pergunta>
-  /nexus --auto <tarefa>
-  /nexus --assist <tarefa>
-  /nexus stop
-
-  /config
-  /status
-  /clear
-  /exit
-
-O terminal abaixo é um shell Linux REAL.
-
-""".format(
-
-                shell=self.pty.shell,
-
-                cwd=os.getcwd(),
-            )
-        )
-
-    # ========================================================
-    # CONTEXTO
-    # ========================================================
-
-    def context(
-        self,
-    ):
-
-        max_chars = int(
-
-            self.config.get(
-                "max_output_chars",
-                12000,
-            )
-        )
-
-        return {
-
-            "shell":
-                self.pty.shell,
-
-            "cwd":
-                os.getcwd(),
-
-            "user":
-                os.environ.get(
-                    "USER",
-                    "",
-                ),
-
-            "last_exit_code":
-                self.last_exit,
-
-            "terminal_output":
-                self.last_output[
-                    -max_chars:
-                ],
-        }
-
-    # ========================================================
-    # EXECUTE AGENT COMMAND
-    # ========================================================
-
-    def execute_agent_command(
-        self,
-        command,
-    ):
-
-        command = clean_shell_input(
-            command
-        )
-
-        print()
-
-        print(
-            "\033[1;36m"
-            "WHITE RAT →"
-            "\033[0m"
-        )
-
-        print(
-            "\033[1m$ "
-            + command
-            + "\033[0m"
-        )
-
-        # ----------------------------------------------------
-        # PERIGOSO
-        # ----------------------------------------------------
-
-        if is_dangerous(
-            command
-        ):
-
-            print()
-
-            print(
-                "\033[1;31m"
-                "COMANDO POTENCIALMENTE PERIGOSO."
-                "\033[0m"
-            )
-
-            answer = input(
-                "Executar mesmo assim? [sim/N]: "
-            )
-
-            answer = clean_terminal_input(
-                answer
-            ).lower()
-
-            if answer not in (
-                "s",
-                "sim",
-                "y",
-                "yes",
-            ):
-
-                print(
-                    "Execução cancelada."
-                )
-
-                return (
-                    "",
-                    None,
-                )
-
-        # ----------------------------------------------------
-        # EXECUÇÃO
-        # ----------------------------------------------------
-
-        output, code = (
-
-            self.pty.run_command_and_capture(
-
-                command,
-
-                timeout=120,
-            )
-        )
-
-        text = output.decode(
-
-            "utf-8",
-
-            errors="replace",
-        )
-
-        self.last_output = text
-
-        self.last_exit = code
-
-        if text:
-
-            print(
-
-                text,
-
-                end=(
-
-                    ""
-
-                    if text.endswith(
-                        "\n"
-                    )
-
-                    else "\n"
-                ),
-            )
-
-        print()
-
-        print(
-
-            "\033[90m"
-
-            f"[exit code: {code}]"
-
-            "\033[0m"
-        )
-
-        return (
-            text,
-            code,
-        )
-
-    # ========================================================
-    # AGENTE
-    # ========================================================
-
-    def ask_agent(
-        self,
-        request,
-        mode="normal",
-    ):
-
-        self.agent_stop.clear()
-
-        conversation = request
-
-        for step in range(
-            12
-        ):
-
-            if self.agent_stop.is_set():
-
-                print(
-                    "\n[NEXUS] "
-                    "Agente interrompido."
-                )
-
-                return
-
-            ctx = self.context()
-
-            ctx[
-                "execution_mode"
-            ] = mode.upper()
-
-            ctx[
-                "agent_step"
-            ] = step + 1
-
-            ctx[
-                "max_agent_steps"
-            ] = 12
-
-            try:
-
-                answer = self.ai.ask(
-
-                    conversation,
-
-                    ctx,
-                )
-
-            except Exception as exc:
-
-                print()
-
-                print(
-                    "\033[1;31m"
-                    "[GEMINI ERROR]"
-                    "\033[0m"
-                )
-
-                print(
-                    exc
-                )
-
-                return
-
-            print()
-
-            print(
-                "\033[1;35m"
-                "WHITE RAT:"
-                "\033[0m"
-            )
-
-            print(
-                answer
-            )
-
-            actions = extract_actions(
-                answer
-            )
-
-            if not actions:
-
-                return
-
-            for command in actions:
-
-                if self.agent_stop.is_set():
-
-                    return
-
-                # ============================================
-                # AUTO
-                # ============================================
-
-                if mode == "auto":
-
-                    output, code = (
-
-                        self.execute_agent_command(
-
-                            command
-                        )
-                    )
-
-                # ============================================
-                # NORMAL / ASSIST
-                # ============================================
-
-                else:
-
-                    print()
-
-                    print(
-                        "Executar comando?"
-                    )
-
-                    print(
-                        "  $ "
-                        + command
-                    )
-
-                    choice = input(
-                        "[s]im [n]ão "
-                        "[a]uto [x]parar: "
-                    )
-
-                    choice = (
-                        clean_terminal_input(
-                            choice
-                        ).lower()
-                    )
-
-                    if choice in (
-                        "x",
-                        "stop",
-                    ):
-
-                        print(
-                            "Agente interrompido."
-                        )
-
-                        return
-
-                    if choice in (
-                        "a",
-                        "auto",
-                    ):
-
-                        mode = "auto"
-
-                        output, code = (
-
-                            self.execute_agent_command(
-
-                                command
-                            )
-                        )
-
-                    elif choice in (
-                        "s",
-                        "sim",
-                        "y",
-                        "yes",
-                    ):
-
-                        output, code = (
-
-                            self.execute_agent_command(
-
-                                command
-                            )
-                        )
-
-                    else:
-
-                        print(
-                            "Comando recusado."
-                        )
-
-                        return
-
-                # ============================================
-                # RESULTADO
-                # ============================================
-
-                conversation = (
-
-                    "O comando foi executado "
-                    "no terminal Linux REAL.\n\n"
-
-                    "COMMAND:\n"
-
-                    + command
-
-                    + "\n\n"
-
-                    "EXIT CODE:\n"
-
-                    + str(code)
-
-                    + "\n\n"
-
-                    "REAL OUTPUT:\n"
-
-                    + output[-12000:]
-
-                    + "\n\n"
-
-                    "Analise SOMENTE o resultado real "
-                    "acima.\n\n"
-
-                    "Se for necessário continuar, "
-                    "produza a próxima ACTION.\n\n"
-
-                    "Se a tarefa estiver concluída, "
-                    "responda normalmente sem ACTION."
-                )
-
-    # ========================================================
-    # /NEXUS
-    # ========================================================
-
-    def process_nexus(
-        self,
-        line,
-    ):
-
-        parts = line.strip().split(
-            maxsplit=2
-        )
-
-        if len(parts) == 1:
-
-            print(
-                "Uso:"
-            )
-
-            print(
-                "  /nexus <pergunta>"
-            )
-
-            print(
-                "  /nexus --auto <tarefa>"
-            )
-
-            print(
-                "  /nexus --assist <tarefa>"
-            )
-
-            print(
-                "  /nexus stop"
-            )
-
+            self.run_technical(raw, "auto" if mode_auto else "normal", route["complexity"], fast)
+        except (RateLimitError, AgentError) as exc:
+            print(f"\n\033[1;31m[NEXUS] {type(exc).__name__.upper()}:\033[0m\n{exc}")
+        except KeyboardInterrupt:
+            print("\n[NEXUS] Tarefa interrompida.")
+
+    def status(self) -> None:
+        print("\n================ NEXUS STATUS ================")
+        print(f"Versão:          {APP_VERSION}")
+        print(f"Modelo:          {self.config.get('model')}")
+        print(f"Shell:           {self.pty.shell}")
+        print(f"PTY:             {'ONLINE' if self.pty.alive else 'OFFLINE'}")
+        print(f"Diretório PTY:   {self.pty.cwd}")
+        print(f"Intervalo API:   {self.config.get('api_min_interval')}s")
+        print(f"APIs tarefa:     {self.current_task_calls}/{self.current_budget}")
+        print("\nPOOL DE CHAVES")
+        for item in self.key_pool.status():
+            print(f"#{item['index']} {item['state']:<18} calls={item['requests']:<4} 429={item['429']:<3} err={item['errors']:<3} auth={item['auth']:<3}")
+        print("===============================================")
+
+    def show_keys(self) -> None:
+        print("\n================ KEY POOL ====================")
+        for item in self.key_pool.status():
+            print(f"Chave #{item['index']}: {item['state']:<18} requests={item['requests']} 429={item['429']} errors={item['errors']} auth={item['auth']}")
+        print("As chaves nunca são exibidas.")
+        print("===============================================")
+
+    def setup_keys(self) -> None:
+        print("\nNEXUS KEY SETUP")
+        print("As chaves serão gravadas em ~/.config/nexus/config.json com permissão 0600.")
+        print("Cole um bloco com uma chave por linha; finalize com uma linha vazia.")
+        print("Também aceito chaves separadas por vírgula ou ponto e vírgula.")
+        print("Deixe a primeira linha vazia para manter o pool atual.")
+        first = input("Bloco de chaves: ")
+        if not first.strip():
+            print("[NEXUS] Pool atual mantido.")
             return
+        pasted = [first]
+        while True:
+            line = input()
+            if not line.strip():
+                break
+            pasted.append(line)
+        new_keys = list(dict.fromkeys(parse_api_keys_block("\n".join(pasted))))
+        self.config["keys"] = new_keys
+        save_config(self.config)
+        self.key_pool = KeyPool(self.config)
+        self.ai.key_pool = self.key_pool
+        print(f"[NEXUS] Configuração salva. Pool: {len(get_api_keys(self.config))} chave(s), sem limite.")
 
-        # ----------------------------------------------------
-        # STOP
-        # ----------------------------------------------------
+    def reset_limits(self) -> None:
+        self.key_pool.reset()
+        print("[NEXUS] Cooldowns do pool zerados.")
 
-        if parts[1] == "stop":
+    @staticmethod
+    def help() -> None:
+        print("""
+================ NEXUS HELP ====================
 
-            self.agent_stop.set()
+/nexus <tarefa>             uma chamada API e ação imediata
+/nexus --auto <tarefa>      execução automática segura
+/nexus --fast <tarefa>      orçamento reduzido
+/nexus --auto --fast ...    combina os modos
+/nexus stop                 interrompe a tarefa
+/status                     estado do NEXUS/pool
+/keys                       saúde das chaves
+/setup                      cola qualquer quantidade de chaves
+/reset-limits               remove cooldowns
+/config                     mostra configuração
+/self-test                  diagnóstico local
+/clear                      limpa a tela
+/help                       esta ajuda
+/exit                       sai
 
-            print(
-                "[NEXUS] "
-                "Sinal de parada enviado."
-            )
+TAB                         autocomplete
+↑ / ↓                       histórico
 
+Exemplos:
+  /nexus oi
+  /nexus mostre minha memória
+  /nexus qual é meu kernel
+  /nexus instale docker
+  /nexus --auto verifique o espaço em disco
+  /nexus analise completamente meu sistema
+
+=================================================
+""")
+
+    def show_config(self) -> None:
+        print(f"\nConfig: {CONFIG_FILE}\n")
+        for key, value in self.config.items():
+            if key == "keys":
+                print(f"{key:<30} [{'CONFIGURADA' if value else 'VAZIA'}]")
+            else:
+                print(f"{key:<30} {value}")
+
+    def command(self, line: str) -> None:
+        line = line.strip()
+        if not line:
             return
-
-        # ----------------------------------------------------
-        # AUTO
-        # ----------------------------------------------------
-
-        if parts[1] == "--auto":
-
-            request = (
-
-                parts[2]
-
-                if len(parts) > 2
-
-                else ""
-            )
-
-            if not request:
-
-                print(
-                    "Informe a tarefa."
-                )
-
-                return
-
-            self.ask_agent(
-                request,
-                "auto",
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # ASSIST
-        # ----------------------------------------------------
-
-        if parts[1] == "--assist":
-
-            request = (
-
-                parts[2]
-
-                if len(parts) > 2
-
-                else ""
-            )
-
-            if not request:
-
-                print(
-                    "Informe a tarefa."
-                )
-
-                return
-
-            self.ask_agent(
-                request,
-                "assist",
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # NORMAL
-        # ----------------------------------------------------
-
-        request = line.strip()[
-
-            len("/nexus"):
-        ].strip()
-
-        self.ask_agent(
-            request,
-            "normal",
-        )
-
-    # ========================================================
-    # COMANDOS
-    # ========================================================
-
-    def command(
-        self,
-        line,
-    ):
-
-        # ----------------------------------------------------
-        # LIMPAR INPUT DO USUÁRIO
-        # ----------------------------------------------------
-
-        line = clean_shell_input(
-            line
-        )
-
-        stripped = line.strip()
-
-        if not stripped:
-
-            return
-
-        # ----------------------------------------------------
-        # EXIT
-        # ----------------------------------------------------
-
-        if stripped == "/exit":
-
-            self.running = False
-
-            return
-
-        # ----------------------------------------------------
-        # CLEAR
-        # ----------------------------------------------------
-
-        if stripped == "/clear":
-
-            os.system(
-                "clear"
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # CONFIG
-        # ----------------------------------------------------
-
-        if stripped == "/config":
-
-            configure()
-
-            self.config = load_config()
-
-            self.ai = AIProvider(
-                self.config
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # STATUS
-        # ----------------------------------------------------
-
-        if stripped == "/status":
-
-            key_configured = bool(
-
-                self.config.get(
-                    "api_key"
-                )
-
-                or
-
-                os.environ.get(
-                    "GEMINI_API_KEY"
-                )
-            )
-
-            model = self.config.get(
-                "model",
-                DEFAULT_CONFIG["model"],
-            )
-
-            print()
-
-            print(
-                "NEXUS STATUS"
-            )
-
-            print(
-                "  Version: "
-                + APP_VERSION
-            )
-
-            print(
-                "  PTY: "
-                + (
-
-                    "ONLINE"
-
-                    if self.pty.alive
-
-                    else "OFFLINE"
-                )
-            )
-
-            print(
-                "  Shell: "
-                + self.pty.shell
-            )
-
-            print(
-                "  CWD: "
-                + os.getcwd()
-            )
-
-            print(
-                "  Provider: Google Gemini"
-            )
-
-            print(
-                "  API URL: "
-                + build_gemini_url(
-                    model
-                )
-            )
-
-            print(
-                "  Model: "
-                + model
-            )
-
-            print(
-                "  API Key: "
-                + (
-
-                    "CONFIGURADA"
-
-                    if key_configured
-
-                    else "NÃO CONFIGURADA"
-                )
-            )
-
-            print(
-                "  Temperature: "
-                + str(
-
-                    self.config.get(
-                        "temperature",
-                        0.2,
-                    )
-                )
-            )
-
-            print(
-                "  Max tokens: "
-                + str(
-
-                    self.config.get(
-                        "max_output_tokens",
-                        4096,
-                    )
-                )
-            )
-
-            print()
-
-            return
-
-        # ----------------------------------------------------
-        # NEXUS
-        # ----------------------------------------------------
-
-        if stripped.startswith(
-            "/nexus"
-        ):
-
-            self.process_nexus(
-                stripped
-            )
-
-            return
-
-        # ----------------------------------------------------
-        # SHELL REAL
-        # ----------------------------------------------------
-
-        self.pty.write(
-            line
-        )
-
-    # ========================================================
-    # LOOP
-    # ========================================================
-
-    def run(
-        self,
-    ):
-
+        if line == "/exit": self.running = False; return
+        if line == "/help": self.help(); return
+        if line == "/status": self.status(); return
+        if line == "/keys": self.show_keys(); return
+        if line == "/setup": self.setup_keys(); return
+        if line == "/reset-limits": self.reset_limits(); return
+        if line == "/config": self.show_config(); return
+        if line == "/clear": os.system("clear"); return
+        if line == "/self-test": self_test(); return
+        if line.startswith("/nexus"):
+            self.process_nexus(line); return
+        self.pty.write(line + "\n")
+
+    def banner(self) -> None:
+        print(f"""
+╔════════════════════════════════════════════════════════════╗
+║                    NEXUS TERMINAL                         ║
+║                       WHITE RAT                           ║
+║                         v6.0                              ║
+╠════════════════════════════════════════════════════════════╣
+║ ROUTER LOCAL       → 0 API quando possível               ║
+║ ONE-SHOT AI        → uma chamada por pedido               ║
+║ PTY                 → Linux REAL                          ║
+║ VALIDAÇÃO           → resultado REAL                      ║
+║ KEY POOL            → quantidade ilimitada / failover sequencial            ║
+║ AUTOCOMPLETE        → TAB                                 ║
+╚════════════════════════════════════════════════════════════╝
+Modelo: {self.config.get('model')}
+Intervalo API: {self.config.get('api_min_interval')}s
+Digite /help para ajuda.
+""")
+
+    def run(self) -> None:
         self.pty.start()
-
-        self.print_banner()
-
-        while (
-
-            self.running
-
-            and
-
-            self.pty.alive
-        ):
-
-            # ------------------------------------------------
-            # OUTPUT
-            # ------------------------------------------------
-
-            output = self.pty.drain()
-
-            if output:
-
-                text = output.decode(
-
-                    "utf-8",
-
-                    errors="replace",
-                )
-
-                self.last_output = (
-                    text[-12000:]
-                )
-
-                sys.stdout.write(
-                    text
-                )
-
-                sys.stdout.flush()
-
-            # ------------------------------------------------
-            # INPUT
-            # ------------------------------------------------
-
-            ready = select.select(
-
-                [sys.stdin],
-
-                [],
-
-                [],
-
-                0.05,
-            )[0]
-
-            if sys.stdin in ready:
-
-                line = sys.stdin.readline()
-
-                if not line:
-
-                    break
-
-                self.command(
-                    line
-                )
-
+        setup_readline(self)
+        self.banner()
+        errors = validate_keys(self.config)
+        if errors:
+            print("\033[1;33m[NEXUS] POOL:\033[0m")
+            for error in errors:
+                print("  - " + error)
+            print("Use /setup ou NEXUS_GEMINI_KEY_1..N ou NEXUS_GEMINI_KEYS.")
+        else:
+            print(f"\033[1;32m[NEXUS] POOL COM {len(get_api_keys(self.config))} CHAVE(S) ATIVO\033[0m")
+        while self.running and self.pty.alive:
+            try:
+                output = self.pty.drain()
+                if output:
+                    sys.stdout.write(output.decode("utf-8", errors="replace")); sys.stdout.flush()
+                line = input("NEXUS> ")
+                self.command(line)
+            except EOFError:
+                break
+            except KeyboardInterrupt:
+                print("\n[NEXUS] Ctrl+C → interrupção solicitada.")
+                self.stop_event.set(); self.pty.interrupt()
+            except Exception as exc:
+                print(f"\n[NEXUS] Erro: {exc}")
+        save_history()
         self.pty.stop()
 
 
-# ============================================================
-# MAIN
-# ============================================================
+def plan_requires_decision(plan: dict[str, Any]) -> bool:
+    text = str(plan.get("next_step", "")).lower()
+    return any(x in text for x in ("decidir", "avaliar se", "verificar se é necessário", "verificar se e necessario", "somente se"))
 
-def main():
 
-    parser = argparse.ArgumentParser(
+def self_test() -> None:
+    print("\n==============================================")
+    print("NEXUS SELF TEST")
+    print("==============================================")
+    print(f"[OK] Python: {sys.version.split()[0]}")
+    print("[OK] pexpect")
+    print("[OK] requests")
+    print("[OK] readline")
+    config = load_config()
+    print(f"[OK] config: {CONFIG_FILE}")
+    keys = get_api_keys(config)
+    print(f"[INFO] pool: {len(keys)} chave(s) configurada(s), sem limite fixo")
+    shell = os.environ.get("SHELL") or "/bin/bash"
+    print(f"[OK] Shell: {shell}")
+    for command in ("bash", "pwd", "ls", "uname"):
+        print(f"[OK] {command}" if shutil.which(command) else f"[WARN] {command} não encontrado")
+    print("\n[TEST] Inicializando PTY...")
+    pty = RealPTY()
+    try:
+        pty.start()
+        output, code = pty.run_command("printf 'NEXUS_SELF_TEST_OK'", 10)
+        if "NEXUS_SELF_TEST_OK" in output and code == 0:
+            print("[OK] PTY REAL funcionando")
+        else:
+            print(f"[FAIL] PTY output={output!r} exit={code}")
+    except Exception as exc:
+        print(f"[FAIL] PTY: {exc}")
+    finally:
+        pty.stop()
+    print("\n==============================================")
+    print("SELF TEST FINALIZADO")
+    print("==============================================")
 
-        description=(
 
-            "NEXUS Terminal - "
-
-            "Linux PTY real + "
-
-            "Google Gemini AI Agent"
-        )
-    )
-
-    parser.add_argument(
-
-        "--config",
-
-        action="store_true",
-
-        help="configurar Gemini API",
-    )
-
-    parser.add_argument(
-
-        "--version",
-
-        action="store_true",
-
-        help="mostrar versão",
-    )
-
+def main() -> None:
+    parser = argparse.ArgumentParser(description="NEXUS TERMINAL Smart Router + Multi-Agent")
+    parser.add_argument("--version", action="store_true")
+    parser.add_argument("--self-test", action="store_true")
+    parser.add_argument("--setup", action="store_true")
     args = parser.parse_args()
-
-    # --------------------------------------------------------
-    # VERSION
-    # --------------------------------------------------------
-
     if args.version:
-
-        print(
-
-            f"{APP_NAME} "
-
-            f"{APP_VERSION}"
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # CONFIG
-    # --------------------------------------------------------
-
-    if args.config:
-
-        configure()
-
-        return
-
-    # --------------------------------------------------------
-    # APP
-    # --------------------------------------------------------
-
+        print(APP_NAME, APP_VERSION); return
+    if args.self_test:
+        self_test(); return
     app = NexusApp()
 
-    # --------------------------------------------------------
-    # CTRL+C
-    # --------------------------------------------------------
+    def signal_handler(signum: int, frame: Any) -> None:
+        app.stop_event.set()
+        try: app.pty.interrupt()
+        except Exception: pass
 
-    def sigint_handler(
-        signum,
-        frame,
-    ):
-
-        app.agent_stop.set()
-
-        if app.pty.alive:
-
-            app.pty.write(
-                "\x03"
-            )
-
-    signal.signal(
-
-        signal.SIGINT,
-
-        sigint_handler,
-    )
-
-    # --------------------------------------------------------
-    # RUN
-    # --------------------------------------------------------
-
+    signal.signal(signal.SIGINT, signal_handler)
     try:
-
+        if args.setup:
+            app.pty.start(); app.setup_keys(); return
         app.run()
-
     except KeyboardInterrupt:
-
-        pass
-
+        print("\n[NEXUS] Encerrando.")
+    except Exception as exc:
+        print(f"\n\033[1;31m[NEXUS] ERRO FATAL:\033[0m\n{exc}")
     finally:
-
+        save_history()
         app.pty.stop()
 
 
-# ============================================================
-# ENTRY POINT
-# ============================================================
-
 if __name__ == "__main__":
-
     main()
