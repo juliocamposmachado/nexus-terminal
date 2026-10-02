@@ -10,7 +10,7 @@
 
 **NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
 
-Versão documentada: **6.6.1-AGENT-GENERATOR-ROBUST**
+Versão documentada: **6.7.0-COMPACT-PROTOCOL**
 
 > O NEXUS foi projetado para mostrar o que está acontecendo: cada etapa do pipeline, chamada de agente, espera do rate limiter, resposta HTTP, retry, execução e validação são exibidos no terminal.
 
@@ -58,6 +58,7 @@ Versão documentada: **6.6.1-AGENT-GENERATOR-ROBUST**
 - Histórico do readline e autocomplete de comandos/caminhos.
 - Painéis, timestamps, barras de progresso e logs de cada etapa no terminal.
 - API keys ocultas nos logs e redigidas em mensagens de erro.
+- Protocolo compacto reversível NCP/1 entre as fases dos agentes.
 
 ## Requisitos
 
@@ -431,6 +432,50 @@ DECISÃO
 - **CONCLUSÃO**: resume o que foi observado.
 - **EVOLUÇÃO**: produz uma substituição para uma única função.
 
+## Protocolo NCP/1
+
+A versão 6.7 introduz o **NCP/1 (NEXUS Compact Protocol)**, um transporte compacto e reversível para compartilhar estados entre as fases dos agentes. Ele reduz nomes repetidos de campos e mantém fallback para JSON normal quando a economia for insuficiente.
+
+Exemplo conceitual:
+
+```text
+JSON normal: {"user_request":"...","interpretation":...,"terminal":...}
+NCP/1:      NCP/1|{"u":"...","i":...,"t":...}
+```
+
+O NCP/1:
+
+- é um protocolo de transporte, não criptografia;
+- usa aliases versionados como `u`, `i`, `t`, `p` e `d`;
+- recebe instruções curtas de decodificação para o agente;
+- é aplicado ao estado enviado entre as etapas;
+- aceita resposta NCP/1 e a expande antes da validação;
+- registra tamanho original, tamanho compacto e percentual de economia;
+- usa JSON normal automaticamente quando a economia fica abaixo do mínimo;
+- não remove os logs legíveis nem a auditoria operacional.
+
+Configuração padrão:
+
+```json
+{
+  "compact_protocol_enabled": true,
+  "compact_protocol_version": "NCP/1",
+  "compact_min_savings_percent": 15,
+  "compact_fallback_enabled": true,
+  "compact_show_preview": false
+}
+```
+
+Para desativar temporariamente:
+
+```json
+{
+  "compact_protocol_enabled": false
+}
+```
+
+A redução varia conforme o tamanho e a repetição do estado. O NCP/1 não garante economia em mensagens curtas; nesses casos o fallback evita aumentar o consumo.
+
 ## Resiliência de APIs
 
 A versão atual inclui uma camada específica para chamadas Gemini.
@@ -548,7 +593,12 @@ Exemplo de configuração:
   "request_max_chars": 20000,
   "max_generated_script_chars": 200000,
   "keep_generated_scripts": true,
-  "terminal_logs": true
+  "terminal_logs": true,
+  "compact_protocol_enabled": true,
+  "compact_protocol_version": "NCP/1",
+  "compact_min_savings_percent": 15,
+  "compact_fallback_enabled": true,
+  "compact_show_preview": false
 }
 ```
 
