@@ -1,5 +1,3 @@
-# NEXUS TERMINAL
-
 <img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/93bab8d1-3608-4653-a878-afec548c237a" />
 
 <img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
@@ -8,6 +6,7 @@
 
 <img width="1373" height="764" alt="image" src="https://github.com/user-attachments/assets/84c11ad3-b328-4e51-9cb2-40f1bb230a4e" />
 
+# NEXUS TERMINAL
 
 **NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
 
