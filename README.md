@@ -4,6 +4,7 @@
 
 <img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/93bab8d1-3608-4653-a878-afec548c237a" />
 
+<img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
 
 Esta versão utiliza o fluxo **One-Shot**:
 
