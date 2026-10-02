@@ -6,6 +6,8 @@
 
 <img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
 
+<img width="1372" height="524" alt="image" src="https://github.com/user-attachments/assets/1a15adb9-01c2-44b0-8270-18c6b0394a9d" />
+
 Versão documentada: **6.5.0-API-RESILIENCE-OBSERVABILITY**
 
 > O NEXUS foi projetado para mostrar o que está acontecendo: cada etapa do pipeline, chamada de agente, espera do rate limiter, resposta HTTP, retry, execução e validação são exibidos no terminal.
