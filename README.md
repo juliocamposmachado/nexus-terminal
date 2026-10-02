@@ -1,14 +1,10 @@
-# NEXUS TERMINAL
-
-**NEXUS TERMINAL** é um agente Linux escrito em Python com PTY real, integração com Gemini, execução de comandos, roteamento local e pool ilimitado de chaves com rotação sequencial.
-
 <img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/93bab8d1-3608-4653-a878-afec548c237a" />
-
-<img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
 
 # NEXUS TERMINAL
 
 **NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
+
+<img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
 
 Versão documentada: **6.5.0-API-RESILIENCE-OBSERVABILITY**
 
