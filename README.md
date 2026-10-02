@@ -6,145 +6,148 @@
 
 <img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
 
-Esta versão utiliza o fluxo **One-Shot**:
+# NEXUS TERMINAL
 
-```text
-Pedido do usuário
-      ↓
-Roteador local
-      ↓
-Uma chamada Gemini
-      ↓
-Resposta ou comando Linux
-      ↓
-Execução imediata no PTY real
-```
+**NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
 
-Não existe mais um pipeline obrigatório de interpretação, planejamento, decisão, execução e validação para cada pedido.
+Versão documentada: **6.5.0-API-RESILIENCE-OBSERVABILITY**
 
-## Principais características
+> O NEXUS foi projetado para mostrar o que está acontecendo: cada etapa do pipeline, chamada de agente, espera do rate limiter, resposta HTTP, retry, execução e validação são exibidos no terminal.
 
-- Uma chamada lógica de API por pedido técnico;
-- Próximo pedido utiliza a próxima chave do pool;
-- Failover automático somente quando a chave atual falha;
-- Quantidade ilimitada de chaves do ponto de vista da aplicação;
-- Aceita 1, 10, 100 ou mais chaves, conforme os recursos disponíveis;
-- Suporte a bloco de chaves com aspas, vírgulas e linhas vazias;
-- Remoção automática de duplicatas preservando a ordem;
-- Suporte a variáveis de ambiente `NEXUS_GEMINI_KEY_1..N`;
-- Suporte a `NEXUS_GEMINI_KEYS` para um bloco completo;
-- PTY Linux real persistente com `pexpect`;
-- Captura de saída e código de saída dos comandos;
-- Execução imediata do comando retornado pela IA;
-- Confirmação para comandos potencialmente perigosos;
-- Roteador local para comandos simples sem consumir API;
-- Autocomplete de comandos, caminhos e comandos internos;
-- Configuração persistente com permissão `0600`;
-- Histórico protegido;
-- Limpeza do eco do shell, prompts de heredoc e marcadores internos do PTY;
-- Teste local sem consumir API.
+## Índice
+
+- [Recursos](#recursos)
+- [Requisitos](#requisitos)
+- [Instalação](#instalação)
+- [Configuração da API Gemini](#configuração-da-api-gemini)
+- [Execução](#execução)
+- [Comandos interativos](#comandos-interativos)
+- [Uso do `/nexus`](#uso-do-nexus)
+- [Uso do `/evoluir`](#uso-do-evoluir)
+- [Arquitetura](#arquitetura)
+- [Resiliência de APIs](#resiliência-de-apis)
+- [Logs e observabilidade](#logs-e-observabilidade)
+- [Configuração avançada](#configuração-avançada)
+- [Segurança](#segurança)
+- [Testes e diagnóstico](#testes-e-diagnóstico)
+- [Estrutura de arquivos](#estrutura-de-arquivos)
+- [Solução de problemas](#solução-de-problemas)
+- [Limitações e responsabilidade](#limitações-e-responsabilidade)
+
+## Recursos
+
+- Roteamento local de pedidos simples sem chamada de API quando possível.
+- Pipeline inteligente com:
+  - interpretação;
+  - planejamento;
+  - decisão de rota;
+  - programação Python ou comando Linux;
+  - execução real;
+  - validação;
+  - conclusão.
+- Integração com a API Gemini via HTTP/REST usando `requests`.
+- Pool de múltiplas API keys com rotação controlada.
+- Failover para falhas de autenticação, rede e servidor.
+- Tratamento de HTTP 429 com cooldown global e respeito ao cabeçalho `Retry-After`.
+- Timeout configurável e backoff exponencial limitado.
+- Controle local de RPM, RPD, tokens e cooldowns.
+- Geração de scripts Python em arquivos reais.
+- Validação por AST e `py_compile` antes da execução.
+- Confirmação para comandos ou scripts potencialmente perigosos.
+- Comando `/evoluir` para modificar somente uma função e salvar uma nova versão.
+- Histórico do readline e autocomplete de comandos/caminhos.
+- Painéis, timestamps, barras de progresso e logs de cada etapa no terminal.
+- API keys ocultas nos logs e redigidas em mensagens de erro.
 
 ## Requisitos
 
-- Linux;
-- Python 3.10 ou superior;
-- Bash ou shell compatível;
-- Acesso à internet para chamadas Gemini;
-- Uma ou mais chaves Gemini válidas;
-- Pacotes Python `pexpect` e `requests`.
+- Python **3.10 ou superior**;
+- Linux, macOS ou ambiente compatível com `bash` e pseudo-terminal;
+- acesso à internet para utilizar a API Gemini;
+- uma chave da API Gemini;
+- pacotes Python:
+  - `pexpect`;
+  - `requests`.
+
+O NEXUS utiliza recursos modernos de tipagem do Python, como `dict[str, Any]` e `str | None`. Por isso, recomenda-se Python 3.10+.
 
 ## Instalação
 
-Clone o repositório:
+### 1. Clone o repositório
 
 ```bash
 git clone https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
 cd SEU_REPOSITORIO
 ```
 
-Instale as dependências:
+Substitua a URL pelo endereço real do repositório.
+
+### 2. Instale as dependências
+
+Instalação apenas para o usuário atual:
 
 ```bash
 python3 -m pip install --user pexpect requests
 ```
 
-Em distribuições que exigem a opção de sistema gerenciado:
+Ou, preferencialmente, crie um ambiente virtual:
 
 ```bash
-python3 -m pip install --user --break-system-packages pexpect requests
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install pexpect requests
 ```
 
-Dê permissão de execução ao programa:
+### 3. Valide a instalação
+
+```bash
+python3 -m py_compile nexus.py
+python3 nexus.py --self-test
+```
+
+O diagnóstico deve indicar, entre outros itens:
+
+```text
+[OK] pexpect
+[OK] requests
+[OK] AST validation
+[OK] py_compile
+[OK] PTY REAL funcionando
+SELF TEST FINALIZADO
+```
+
+### 4. Torne o arquivo executável, opcionalmente
 
 ```bash
 chmod +x nexus.py
 ```
 
-## Execução
-
-Execute:
-
-```bash
-python3 nexus.py
-```
-
-Ou:
+Depois, ele poderá ser executado diretamente:
 
 ```bash
 ./nexus.py
 ```
 
-Verifique a versão:
+## Configuração da API Gemini
+
+O NEXUS pode receber as chaves de duas formas.
+
+### Opção A — configuração interativa
+
+Execute:
 
 ```bash
-python3 nexus.py --version
+python3 nexus.py --setup
 ```
 
-## Configuração das chaves
-
-Dentro do programa, execute:
+Ou, dentro do programa:
 
 ```text
 /setup
 ```
 
-Cole as chaves em um bloco. O programa aceita os seguintes formatos.
-
-### Uma chave por linha
-
-```text
-CHAVE_1
-CHAVE_2
-CHAVE_3
-```
-
-### Formato com aspas e vírgulas
-
-```text
-"CHAVE_1",
-
-"CHAVE_2",
-
-"CHAVE_3",
-```
-
-### Formato separado por vírgulas
-
-```text
-CHAVE_1, CHAVE_2, CHAVE_3
-```
-
-Depois de colar o bloco, finalize com uma linha vazia.
-
-O programa irá:
-
-- remover aspas;
-- remover vírgulas;
-- ignorar linhas vazias;
-- remover espaços extras;
-- remover chaves duplicadas;
-- preservar a ordem;
-- salvar as chaves com permissão `0600`.
+Cole uma chave por linha e finalize com uma linha vazia.
 
 As chaves são armazenadas em:
 
@@ -152,287 +155,554 @@ As chaves são armazenadas em:
 ~/.config/nexus/config.json
 ```
 
-O arquivo não deve ser enviado ao GitHub.
+O diretório recebe permissões restritivas e o arquivo de configuração é salvo com permissão `0600`.
 
-## Variáveis de ambiente
+### Opção B — variáveis de ambiente
 
-Também é possível configurar as chaves por variáveis de ambiente, sem gravá-las no código:
-
-```bash
-export NEXUS_GEMINI_KEY_1="SUA_CHAVE_1"
-export NEXUS_GEMINI_KEY_2="SUA_CHAVE_2"
-export NEXUS_GEMINI_KEY_3="SUA_CHAVE_3"
-```
-
-Não existe limite fixo no número da variável. Por exemplo:
+Uma chave:
 
 ```bash
-export NEXUS_GEMINI_KEY_25="SUA_CHAVE_25"
-export NEXUS_GEMINI_KEY_100="SUA_CHAVE_100"
+export NEXUS_GEMINI_KEY_1="SUA_CHAVE_GEMINI"
 ```
 
-Também é possível usar um bloco completo:
+Múltiplas chaves:
 
 ```bash
-export NEXUS_GEMINI_KEYS='"SUA_CHAVE_1", "SUA_CHAVE_2", "SUA_CHAVE_3"'
+export NEXUS_GEMINI_KEY_1="CHAVE_1"
+export NEXUS_GEMINI_KEY_2="CHAVE_2"
+export NEXUS_GEMINI_KEY_3="CHAVE_3"
 ```
 
-A ordem de carregamento é:
+Também é possível usar a variável agregada:
 
-1. Chaves salvas em `config.json`;
-2. Variáveis `NEXUS_GEMINI_KEY_N`, ordenadas numericamente;
-3. Conteúdo de `NEXUS_GEMINI_KEYS`;
-4. Duplicatas removidas preservando a primeira ocorrência.
-
-## Como funciona a rotação
-
-Cada pedido técnico usa uma chamada lógica:
-
-```text
-Pedido 1 → chave #1 → resposta ou comando
-Pedido 2 → chave #2 → resposta ou comando
-Pedido 3 → chave #3 → resposta ou comando
+```bash
+export NEXUS_GEMINI_KEYS="CHAVE_1,CHAVE_2,CHAVE_3"
 ```
 
-Se uma chave falhar durante o pedido:
+As chaves configuradas pelo arquivo e pelo ambiente são deduplicadas. O NEXUS nunca deve exibir a chave no terminal, em logs ou em mensagens de erro.
 
-```text
-Pedido 1 → chave #1 → HTTP 429
-Pedido 1 → chave #2 → mesma solicitação
+> Não coloque chaves reais no Git, no README, em issues ou em commits. Use variáveis de ambiente ou um arquivo local fora do controle de versão.
+
+## Execução
+
+Inicie o terminal inteligente com:
+
+```bash
+python3 nexus.py
 ```
 
-A próxima chave recebe a mesma solicitação original.
+Na inicialização, o NEXUS informa:
 
-Falhas consideradas para failover incluem:
+- versão;
+- modelo configurado;
+- intervalo mínimo entre chamadas;
+- quota local;
+- localização dos scripts gerados;
+- quantidade de chaves disponíveis.
 
-- HTTP `429`;
-- quota excedida;
-- HTTP `401` ou `403`;
-- timeout;
-- erro de rede;
-- HTTP `5xx`;
-- indisponibilidade temporária.
+Se nenhuma chave estiver configurada, comandos locais ainda poderão funcionar, mas as tarefas que exigem IA retornarão uma mensagem solicitando `/setup` ou a configuração de uma variável de ambiente.
 
-Durante a mesma tarefa, uma chave que falhou não é repetida indefinidamente. Em um novo pedido, o estado temporário de falha é limpo e a rotação continua a partir do cursor atual.
-
-## Formato da resposta da IA
-
-A chamada One-Shot solicita JSON no seguinte formato:
-
-```json
-{
-  "response": "resposta textual opcional",
-  "command": "comando Linux opcional",
-  "reason": "motivo"
-}
-```
-
-Se `command` estiver preenchido, o NEXUS:
-
-1. mostra o comando;
-2. solicita confirmação quando necessário;
-3. executa o comando no PTY real;
-4. mostra a saída;
-5. mostra o código de saída.
-
-Se somente `response` estiver preenchido, o texto é exibido sem executar comandos.
-
-## Exemplos de uso
-
-### Comando resolvido localmente, sem API
-
-```text
-/nexus mostre meu diretório
-```
-
-```text
-/nexus mostre a memória
-```
-
-```text
-/nexus liste os arquivos
-```
-
-### Pedido técnico com uma chamada
-
-```text
-/nexus mostre a versão do kernel Linux
-```
-
-A IA pode retornar:
-
-```json
-{
-  "response": "",
-  "command": "uname -r",
-  "reason": "Consulta local do kernel"
-}
-```
-
-### Criar e executar um script Bash
-
-```text
-/nexus crie um script Bash temporário em /tmp/nexus-test.sh, execute-o e mostre o resultado. Use um único comando shell seguro.
-```
-
-### Múltiplos passos no PTY
-
-```text
-/nexus crie um diretório em /tmp/nexus-data, gere um arquivo com cinco linhas, ordene seu conteúdo e crie um relatório com a quantidade de linhas
-```
-
-## Comandos internos
+## Comandos interativos
 
 | Comando | Função |
 |---|---|
-| `/nexus <tarefa>` | Faz uma chamada One-Shot e executa a ação retornada |
-| `/nexus --auto <tarefa>` | Executa automaticamente comandos não perigosos |
-| `/nexus --fast <tarefa>` | Modo compatível de execução rápida |
-| `/nexus stop` | Interrompe a tarefa atual |
-| `/status` | Mostra o estado do NEXUS e do pool |
-| `/keys` | Mostra a saúde das chaves sem revelar os valores |
-| `/setup` | Configura ou substitui o bloco de chaves |
-| `/reset-limits` | Remove cooldowns das chaves |
-| `/config` | Mostra a configuração sem imprimir as chaves |
-| `/self-test` | Executa diagnóstico local sem consumir API |
-| `/clear` | Limpa o terminal |
-| `/help` | Mostra a ajuda |
-| `/exit` | Encerra o programa |
+| `/nexus <tarefa>` | Executa o pipeline inteligente normal. |
+| `/nexus --auto <tarefa>` | Ativa modo automático para comandos não perigosos. |
+| `/nexus --fast <tarefa>` | Reduz as etapas de planejamento. |
+| `/nexus --auto --fast <tarefa>` | Combina os dois modos. |
+| `/nexus stop` | Interrompe a tarefa e envia interrupção ao PTY. |
+| `/evoluir` | Evolui uma função específica e salva uma nova versão. |
+| `/status` | Mostra estado do NEXUS, PTY, pool e quotas. |
+| `/quota` | Mostra contadores e limites locais de quota. |
+| `/quota-reset` | Zera os contadores locais de quota. |
+| `/keys` | Mostra a saúde do pool sem exibir as chaves. |
+| `/setup` | Configura as chaves Gemini interativamente. |
+| `/reset-limits` | Remove cooldowns do pool e cooldown global. |
+| `/config` | Mostra a configuração carregada, ocultando o conteúdo das chaves. |
+| `/scripts` | Lista scripts Python gerados. |
+| `/self-test` | Executa diagnóstico local. |
+| `/clear` | Limpa a tela do terminal. |
+| `/help` | Mostra a ajuda incorporada. |
+| `/exit` | Encerra o NEXUS. |
 
-## Testes
+Qualquer entrada que não seja um comando interno é encaminhada ao PTY local.
 
-### Teste de sintaxe
+## Uso do `/nexus`
+
+Exemplos:
+
+```text
+NEXUS> /nexus liste os arquivos do diretório atual
+```
+
+Pedidos simples podem ser roteados localmente para comandos como `pwd` ou `ls`, evitando consumo de API quando a rota local reconhece a solicitação.
+
+Para uma tarefa que exige análise ou programação:
+
+```text
+NEXUS> /nexus analise os arquivos Python deste diretório e gere um relatório
+```
+
+O fluxo exibirá painéis semelhantes a:
+
+```text
+┌── PIPELINE NEXUS ────────────────────────────────────┐
+│ Modo: normal                                         │
+│ Complexidade: alta                                   │
+│ Logs locais no terminal; sem chamadas extras         │
+└─────────────────────────────────────────────────────┘
+[NEXUS PROGRESS] Interpretação       [████······················] 1/7
+```
+
+## Uso do `/evoluir`
+
+O `/evoluir` altera somente uma função ou método, valida o resultado e salva uma nova versão sem sobrescrever o arquivo original.
+
+Execute:
+
+```text
+NEXUS> /evoluir
+```
+
+O NEXUS perguntará:
+
+```text
+Arquivo Python alvo [/caminho/atual/nexus.py]:
+Qual parte/classe? (Enter se estiver no módulo):
+Qual função/método?
+Qual evolução deseja aplicar?
+```
+
+### Exemplo — evoluir um método de uma classe
+
+Arquivo de teste:
+
+```python
+class Calculadora:
+    def somar(self, a, b):
+        return a + b
+```
+
+Respostas:
+
+```text
+Arquivo Python alvo: /caminho/exemplo.py
+Qual parte/classe? (Enter se estiver no módulo): Calculadora
+Qual função/método? somar
+Qual evolução deseja aplicar? Aceite números como strings, converta-os para float antes da soma e preserve o nome e a assinatura do método.
+```
+
+O agente recebe somente a função selecionada. O NEXUS exige que a resposta contenha exatamente uma função com o mesmo nome. Depois:
+
+1. analisa o arquivo com AST;
+2. localiza a função pelo nome e pela classe, se informada;
+3. envia somente o trecho selecionado ao agente de evolução;
+4. rejeita código vazio, inválido ou incompleto;
+5. substitui somente o intervalo da função em memória;
+6. valida o arquivo final com AST;
+7. salva uma nova versão;
+8. executa `py_compile` na nova versão;
+9. preserva o arquivo original.
+
+O arquivo criado segue este padrão:
+
+```text
+exemplo_evolucao_20261002_192500_a1b2c3.py
+```
+
+### Recomendações para pedidos de evolução
+
+Prefira pedidos específicos:
+
+```text
+Evolua somente a função ask da classe GeminiClient para respeitar api_timeout, tratar erros HTTP 429, usar Retry-After e preservar o formato atual de retorno. Não altere outras funções.
+```
+
+Evite pedidos vagos como:
+
+```text
+Evolua o uso de APIs.
+```
+
+Se houver duas funções com o mesmo nome em classes diferentes, informe a classe para desambiguar.
+
+> O `/evoluir` gera e valida a nova versão, mas não executa automaticamente o código evoluído. Revise o diff antes de substituir ou publicar o arquivo.
+
+## Arquitetura
+
+O fluxo principal é:
+
+```text
+PEDIDO
+  ↓
+ROTEADOR LOCAL
+  ↓
+INTERPRETAÇÃO
+  ↓
+PLANEJAMENTO
+  ↓
+DECISÃO
+  ↓
+┌───────────────────────┬──────────────────────┐
+│ comando Linux          │ programa Python      │
+│ confirmação            │ arquivo real        │
+└───────────────────────┴──────────────────────┘
+              ↓
+        AST + py_compile
+              ↓
+       EXECUÇÃO REAL
+              ↓
+        stdout/stderr
+              ↓
+          exit code
+              ↓
+          VALIDAÇÃO
+              ↓
+          CONCLUSÃO
+```
+
+### Agentes internos
+
+- **RESPOSTA ÚNICA**: resolve tarefas simples em uma única decisão.
+- **INTERPRETAÇÃO**: transforma o pedido em especificação.
+- **PLANEJAMENTO**: cria um plano executável.
+- **DECISÃO**: escolhe resposta, comando ou Python.
+- **PROGRAMAÇÃO**: gera programa Python completo.
+- **VALIDAÇÃO**: avalia o resultado real.
+- **CONCLUSÃO**: resume o que foi observado.
+- **EVOLUÇÃO**: produz uma substituição para uma única função.
+
+## Resiliência de APIs
+
+A versão atual inclui uma camada específica para chamadas Gemini.
+
+### Timeout
+
+O tempo máximo de uma chamada é controlado por:
+
+```json
+"api_timeout": 90
+```
+
+O timeout impede que uma requisição fique bloqueada indefinidamente.
+
+### Retry e backoff
+
+Falhas temporárias de rede, timeout e respostas HTTP 5xx podem ser repetidas de acordo com:
+
+```json
+"max_retries": 1,
+"api_backoff_base": 2,
+"api_backoff_max": 30
+```
+
+O backoff é exponencial, mas limitado pelo valor máximo configurado.
+
+### HTTP 429
+
+Quando o provedor retorna HTTP 429, o NEXUS:
+
+- lê `Retry-After`, quando presente;
+- aplica cooldown global;
+- registra o evento na quota local;
+- não faz rotação cega pelas demais chaves;
+- informa a espera no terminal;
+- evita tratar várias chaves do mesmo projeto como solução para uma quota compartilhada.
+
+### HTTP 401 e 403
+
+Erros de autenticação ou autorização marcam a chave como problemática e permitem failover controlado para outra chave disponível, respeitando `max_key_failover`.
+
+### Quota local
+
+Os controles locais são mecanismos conservadores de proteção operacional. Eles **não representam a quota oficial do Google**.
+
+Configurações relevantes:
+
+```json
+"quota_soft_rpm": 6,
+"quota_soft_tpm": 0,
+"quota_soft_rpd": 0,
+"quota_global_cooldown": 60,
+"quota_persist": true
+```
+
+## Logs e observabilidade
+
+A observabilidade é local e não cria chamadas adicionais à API.
+
+O terminal exibe:
+
+- timestamp de cada evento;
+- etapa atual;
+- progresso do pipeline;
+- agente e chamada atual;
+- modelo e tamanho aproximado do payload;
+- timeout configurado;
+- número da chave selecionada, nunca o valor da chave;
+- retry, failover e backoff;
+- status HTTP e tempo de resposta;
+- tempo total da API;
+- execução no PTY;
+- validação AST/compilação;
+- resultado final.
+
+Os logs não adicionam espera artificial. As únicas esperas exibidas são as já necessárias para:
+
+- `api_min_interval`;
+- retry/backoff;
+- cooldown de quota;
+- timeout da chamada;
+- cooldown de execução local, quando configurado.
+
+## Configuração avançada
+
+A configuração padrão fica definida em `DEFAULT_CONFIG` e pode ser complementada ou substituída por:
+
+```text
+~/.config/nexus/config.json
+```
+
+Exemplo de configuração:
+
+```json
+{
+  "model": "gemini-3.6-flash",
+  "temperature": 0.1,
+  "max_output_tokens": 3000,
+  "programming_max_output_tokens": 10000,
+  "api_timeout": 90,
+  "api_backoff_base": 2,
+  "api_backoff_max": 30,
+  "terminal_timeout": 300,
+  "generated_script_timeout": 300,
+  "api_min_interval": 8,
+  "max_key_failover": 5,
+  "max_retries": 1,
+  "quota_soft_rpm": 6,
+  "quota_soft_tpm": 0,
+  "quota_soft_rpd": 0,
+  "quota_global_cooldown": 60,
+  "quota_persist": true,
+  "dangerous_always_confirm": true,
+  "max_output_chars": 8000,
+  "request_max_chars": 20000,
+  "max_generated_script_chars": 200000,
+  "keep_generated_scripts": true,
+  "terminal_logs": true
+}
+```
+
+Para visualizar a configuração carregada:
+
+```text
+NEXUS> /config
+```
+
+A lista de chaves é indicada como configurada ou vazia, sem exibir os valores.
+
+## Segurança
+
+O NEXUS adota as seguintes medidas:
+
+- não exibe API keys no terminal;
+- redige chaves em mensagens de erro;
+- salva configuração com permissões restritivas;
+- usa escrita atômica para arquivos persistentes;
+- sanitiza nomes de scripts gerados;
+- valida código Python com AST e `py_compile`;
+- detecta placeholders e código incompleto;
+- pede confirmação para comandos perigosos;
+- pede confirmação para scripts com operações sensíveis;
+- não instala automaticamente dependências declaradas por um script gerado;
+- preserva o arquivo original durante `/evoluir`.
+
+### Comandos perigosos
+
+Comandos como remoção destrutiva, formatação de dispositivos, reboot, shutdown e alterações amplas de permissões são reconhecidos e exigem confirmação adicional quando aplicável.
+
+Ainda assim, nenhuma camada automática substitui a revisão humana. Leia comandos, scripts e diffs antes de executá-los em ambientes importantes.
+
+## Testes e diagnóstico
+
+### Compilação
 
 ```bash
 python3 -m py_compile nexus.py
 ```
 
-### Self-test
+### Autoteste
 
 ```bash
 python3 nexus.py --self-test
 ```
 
-O self-test verifica:
+O autoteste verifica:
 
 - versão do Python;
 - `pexpect`;
 - `requests`;
 - `readline`;
-- shell disponível;
-- comandos básicos;
-- PTY real;
-- código de saída do processo.
+- configuração;
+- quota manager;
+- comandos básicos do sistema;
+- validação AST;
+- `py_compile`;
+- inicialização do PTY.
 
-Esse teste não consome API.
+### Verificação de versão
 
-### Teste do PTY
+```bash
+python3 nexus.py --version
+```
 
-Dentro do NEXUS:
+### Teste manual de `/evoluir`
+
+Crie um arquivo pequeno:
+
+```bash
+cat > exemplo_evoluir.py <<'PY'
+class Calculadora:
+    def somar(self, a, b):
+        return a + b
+
+if __name__ == "__main__":
+    print(Calculadora().somar(2, 3))
+PY
+```
+
+Teste o original:
+
+```bash
+python3 exemplo_evoluir.py
+```
+
+Use `/evoluir` no NEXUS, aponte para `exemplo_evoluir.py`, informe `Calculadora`, `somar` e uma evolução específica. Depois confira:
+
+```bash
+ls -lah exemplo_evoluir*
+python3 -m py_compile exemplo_evolucao_*.py
+```
+
+O arquivo original deve permanecer no lugar.
+
+## Estrutura de arquivos
 
 ```text
-printf 'NEXUS_TEST_OK'
+.
+├── nexus.py                 # aplicação principal
+├── README.md                # documentação do projeto
+├── .venv/                   # opcional; ambiente virtual local
+└── ...                      # arquivos do repositório
 ```
 
-O resultado esperado inclui:
+Arquivos gerados em tempo de execução:
 
 ```text
-NEXUS_TEST_OK
-[exit code: 0]
+~/.config/nexus/
+├── config.json              # configuração e, se escolhida, chaves
+├── history                  # histórico readline
+├── quota_state.json         # contadores locais persistentes
+└── generated/               # scripts gerados pelo pipeline
 ```
 
-### Teste de pipeline
+O `/evoluir` salva a nova versão no diretório do arquivo alvo, seguindo o padrão `*_evolucao_YYYYMMDD_HHMMSS_<id>.py`.
+
+## Solução de problemas
+
+### `Dependência ausente: pexpect`
+
+Instale as dependências:
+
+```bash
+python3 -m pip install --user pexpect requests
+```
+
+Se estiver usando ambiente virtual, ative-o antes.
+
+### `Nenhuma API key configurada`
+
+Configure uma chave:
+
+```bash
+python3 nexus.py --setup
+```
+
+ou:
+
+```bash
+export NEXUS_GEMINI_KEY_1="SUA_CHAVE_GEMINI"
+```
+
+### `Todas as chaves disponíveis estão em cooldown`
+
+Verifique:
 
 ```text
-printf 'banana\nlaranja\nbanana\nuva\n' | sort | uniq -c | sort -nr
+NEXUS> /keys
+NEXUS> /quota
+NEXUS> /status
 ```
 
-### Teste de script Bash
+O cooldown pode ser removido com:
 
 ```text
-printf '%s\n' '#!/usr/bin/env bash' 'set -euo pipefail' 'mkdir -p /tmp/nexus-test' 'printf "%s\n" alpha beta gamma > /tmp/nexus-test/input.txt' 'sort /tmp/nexus-test/input.txt > /tmp/nexus-test/sorted.txt' 'wc -l /tmp/nexus-test/sorted.txt' > /tmp/nexus-test.sh && chmod +x /tmp/nexus-test.sh && /tmp/nexus-test.sh
+NEXUS> /reset-limits
 ```
 
-## Segurança
+Esse comando remove cooldowns locais, mas não remove limites impostos pelo provedor.
 
-- Nunca coloque chaves reais no código-fonte;
-- Nunca envie `config.json` para o GitHub;
-- Nunca publique chaves em issues, logs ou screenshots;
-- O programa não imprime chaves completas;
-- A configuração é gravada com permissão `0600`;
-- Comandos potencialmente perigosos pedem confirmação;
-- O PTY permanece real, portanto comandos confirmados têm efeito no sistema;
-- Revogue chaves que tenham sido expostas publicamente;
-- Use um arquivo `.gitignore` apropriado.
+### HTTP 429
 
-Exemplo de `.gitignore`:
+HTTP 429 indica limitação de quota ou frequência. Aguarde o cooldown informado, revise `api_min_interval`, `quota_soft_rpm` e a quota oficial do projeto no Google AI Studio. Não presuma que adicionar mais chaves resolverá uma quota global compartilhada.
 
-```gitignore
-__pycache__/
-*.pyc
-.env
-config.json
-*.log
-.DS_Store
+### `Função não encontrada` no `/evoluir`
+
+Confira:
+
+- o caminho absoluto do arquivo;
+- o nome exato da função;
+- a classe correta, quando for método;
+- se a função é realmente `def` ou `async def` no escopo esperado.
+
+### Função ambígua no `/evoluir`
+
+Informe o nome da classe em **Qual parte/classe?**. Isso evita alterar a função errada.
+
+### Falha de AST ou `py_compile`
+
+A nova versão não deve ser usada. Revise a mensagem, mantenha o arquivo original e ajuste o pedido de evolução para ser mais específico.
+
+## Limitações e responsabilidade
+
+- O NEXUS depende da disponibilidade, autenticação, modelo e quotas da API Gemini.
+- As quotas locais são estimativas de proteção e não substituem os limites oficiais do provedor.
+- O modo automático não elimina todos os riscos; comandos e scripts devem ser revisados.
+- Código gerado por IA deve ser auditado antes de uso em produção.
+- O `/evoluir` modifica uma função por vez e não garante correção semântica completa do programa.
+- O projeto não instala dependências automaticamente para scripts gerados.
+- O arquivo original deve ser versionado com Git antes de evoluções importantes.
+
+## Fluxo recomendado para contribuição
+
+Antes de enviar alterações ao GitHub:
+
+```bash
+python3 -m py_compile nexus.py
+python3 nexus.py --self-test
+git diff --check
+git status
 ```
 
-A configuração normalmente fica fora do repositório, em `~/.config/nexus/`.
+Depois, revise especialmente:
 
-## Arquitetura
-
-```text
-Entrada do usuário
-        ↓
-Router local
-        ├── conversa local
-        ├── comando local
-        └── pedido técnico
-                ↓
-         Gemini One-Shot
-                ↓
-       response ou command
-                ↓
-          Confirmação
-                ↓
-             PTY real
-                ↓
-       saída + exit code
-```
-
-O pool de chaves mantém, para cada chave:
-
-- quantidade de chamadas;
-- quantidade de HTTP 429;
-- quantidade de erros;
-- quantidade de erros de autenticação;
-- cooldown individual.
-
-## Arquivos principais
-
-```text
-nexus.py                       versão principal para execução
-nexus_terminal_sequencial.py   cópia da versão sequencial
-nexus_fixed.py                 cópia corrigida do núcleo
-README.md                      documentação
-```
-
-A interface gráfica não faz parte desta versão de uso. O projeto é executado exclusivamente pelo código Python no terminal.
-
-## Limitações conhecidas
-
-- Uma única chamada por pedido reduz o custo e a latência, mas não faz validação automática posterior do resultado;
-- Se todas as chaves pertencerem ao mesmo projeto Google, elas podem compartilhar a mesma quota;
-- HTTP 429 pode indicar limite do projeto, modelo ou conta, e não apenas uma chave individual;
-- O comando retornado pela IA deve ser revisado antes da confirmação;
-- O PTY executa comandos reais no sistema;
-- Chaves inválidas ou revogadas são isoladas temporariamente pelo failover.
+- alterações no cliente de API;
+- logs e possíveis vazamentos de segredo;
+- tratamento de timeout, 429 e 5xx;
+- comportamento do `/evoluir`;
+- permissões dos arquivos gerados;
+- compatibilidade com o Python suportado.
 
 ## Licença
 
-Adicione aqui a licença escolhida para o projeto, por exemplo:
-
-```text
-MIT License
-```
-
-Não publique chaves Gemini reais no repositório.
+Nenhum arquivo de licença foi presumido nesta documentação. Defina e adicione uma licença explícita ao repositório antes de publicar o projeto, conforme a intenção do mantenedor.
