@@ -1,18 +1,14 @@
-<img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/93bab8d1-3608-4653-a878-afec548c237a" />
-
 # NEXUS TERMINAL
 
-**NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
+<img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/93bab8d1-3608-4653-a878-afec548c237a" />
 
 <img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
 
 <img width="1372" height="524" alt="image" src="https://github.com/user-attachments/assets/1a15adb9-01c2-44b0-8270-18c6b0394a9d" />
 
-# NEXUS TERMINAL
-
 **NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
 
-Versão documentada: **6.6.0-AGENT-GENERATOR-OBSERVABILITY**
+Versão documentada: **6.6.1-AGENT-GENERATOR-ROBUST**
 
 > O NEXUS foi projetado para mostrar o que está acontecendo: cada etapa do pipeline, chamada de agente, espera do rate limiter, resposta HTTP, retry, execução e validação são exibidos no terminal.
 
@@ -278,6 +274,8 @@ Qual é o objetivo principal do agente?
 O gerador cria um programa Python completo com:
 
 - `SYSTEM_PROMPT` incorporando a personalidade escolhida;
+- protocolo `code_lines`, que reduz falhas de escape JSON durante a geração;
+- segunda tentativa automática quando a resposta JSON vier inválida;
 - loop de conversa no terminal;
 - chamada à API Gemini via `requests`;
 - leitura de chave por `NEXUS_GEMINI_KEY_1`, `GEMINI_API_KEY` ou `NEXUS_GEMINI_KEYS`;
