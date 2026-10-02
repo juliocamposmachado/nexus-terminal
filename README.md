@@ -8,7 +8,11 @@
 
 <img width="1372" height="524" alt="image" src="https://github.com/user-attachments/assets/1a15adb9-01c2-44b0-8270-18c6b0394a9d" />
 
-Versão documentada: **6.5.0-API-RESILIENCE-OBSERVABILITY**
+# NEXUS TERMINAL
+
+**NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
+
+Versão documentada: **6.6.0-AGENT-GENERATOR-OBSERVABILITY**
 
 > O NEXUS foi projetado para mostrar o que está acontecendo: cada etapa do pipeline, chamada de agente, espera do rate limiter, resposta HTTP, retry, execução e validação são exibidos no terminal.
 
@@ -209,6 +213,7 @@ Se nenhuma chave estiver configurada, comandos locais ainda poderão funcionar, 
 | `/nexus --fast <tarefa>` | Reduz as etapas de planejamento. |
 | `/nexus --auto --fast <tarefa>` | Combina os dois modos. |
 | `/nexus stop` | Interrompe a tarefa e envia interrupção ao PTY. |
+| `/agente` | Gera um pequeno agente Python a partir de uma personalidade. |
 | `/evoluir` | Evolui uma função específica e salva uma nova versão. |
 | `/status` | Mostra estado do NEXUS, PTY, pool e quotas. |
 | `/quota` | Mostra contadores e limites locais de quota. |
@@ -250,6 +255,62 @@ O fluxo exibirá painéis semelhantes a:
 │ Logs locais no terminal; sem chamadas extras         │
 └─────────────────────────────────────────────────────┘
 [NEXUS PROGRESS] Interpretação       [████······················] 1/7
+```
+
+## Uso do `/agente`
+
+O comando `/agente` gera um pequeno agente Python independente a partir de uma personalidade e de um objetivo informados pelo usuário.
+
+Execute:
+
+```text
+NEXUS> /agente
+```
+
+O NEXUS perguntará:
+
+```text
+Qual a personalidade do agente?
+Nome do agente (Enter = agente_personalizado):
+Qual é o objetivo principal do agente?
+```
+
+O gerador cria um programa Python completo com:
+
+- `SYSTEM_PROMPT` incorporando a personalidade escolhida;
+- loop de conversa no terminal;
+- chamada à API Gemini via `requests`;
+- leitura de chave por `NEXUS_GEMINI_KEY_1`, `GEMINI_API_KEY` ou `NEXUS_GEMINI_KEYS`;
+- timeout configurável por `AGENT_API_TIMEOUT`;
+- tratamento de ausência de chave, timeout, rede e HTTP 4xx/5xx;
+- saída por `/sair`, `/exit` ou Ctrl+C;
+- nenhuma execução de shell;
+- nenhuma chave hardcoded no código gerado.
+
+Exemplo de solicitação:
+
+```text
+Qual a personalidade do agente? Você é um tutor paciente de Python, didático e objetivo.
+Nome do agente: tutor_python
+Qual é o objetivo principal do agente? Ensinar programação Python com exemplos curtos e exercícios práticos.
+```
+
+O arquivo será salvo em:
+
+```text
+~/.config/nexus/generated/agente_tutor_python_YYYYMMDD_HHMMSS_<id>.py
+```
+
+Depois de configurar uma API key, execute o agente com:
+
+```bash
+python3 ~/.config/nexus/generated/agente_tutor_python_*.py
+```
+
+As dependências declaradas pelo agente são apenas informativas. O NEXUS não instala pacotes automaticamente. Revise o arquivo gerado e valide-o antes de uso:
+
+```bash
+python3 -m py_compile ~/.config/nexus/generated/agente_tutor_python_*.py
 ```
 
 ## Uso do `/evoluir`
