@@ -1,817 +1,455 @@
-<img width="1365" height="717" alt="image" src="https://github.com/user-attachments/assets/93bab8d1-3608-4653-a878-afec548c237a" />
+# NEXUS TERMINAL — Copilot no Microsoft Edge, sem API
 
-<img width="1371" height="761" alt="image" src="https://github.com/user-attachments/assets/657f3a1c-47c1-4a39-b455-497f5aa78c79" />
+Agente Linux em Python com execução real no terminal, usando o **Microsoft Copilot através do navegador Microsoft Edge**. Esta versão não usa Gemini API, OpenAI API, API key, `requests` para IA ou endpoint HTTP de modelo.
 
-<img width="1372" height="524" alt="image" src="https://github.com/user-attachments/assets/1a15adb9-01c2-44b0-8270-18c6b0394a9d" />
+> **Status desta documentação:** preparada para a versão local `7.0.1-COPILOT-CONFIRM`, com correções de captura da resposta JSON e confirmação `sim / não / auto`.
 
-<img width="1373" height="764" alt="image" src="https://github.com/user-attachments/assets/84c11ad3-b328-4e51-9cb2-40f1bb230a4e" />
+## Relação com o repositório original
 
-# NEXUS TERMINAL
+Repositório pesquisado: [github.com/juliocamposmachado/nexus-terminal](https://github.com/juliocamposmachado/nexus-terminal)
 
-**NEXUS TERMINAL** é um terminal inteligente em Python com roteamento local, integração com a API Gemini, execução controlada de comandos Linux, geração e validação de programas Python, gestão de quotas, pool de API keys, failover e observabilidade detalhada no terminal.
+O README publicado no repositório ainda descreve o fluxo antigo baseado em **Gemini API**, pool de chaves e `requests`. Esta documentação substitui aquele fluxo para a instalação local baseada no arquivo `nexus_edge_copilot.py`.
 
-Versão documentada: **6.7.0-COMPACT-PROTOCOL**
+A versão sem API usa esta arquitetura:
 
-> O NEXUS foi projetado para mostrar o que está acontecendo: cada etapa do pipeline, chamada de agente, espera do rate limiter, resposta HTTP, retry, execução e validação são exibidos no terminal.
-
-## Índice
-
-- [Recursos](#recursos)
-- [Requisitos](#requisitos)
-- [Instalação](#instalação)
-- [Configuração da API Gemini](#configuração-da-api-gemini)
-- [Execução](#execução)
-- [Comandos interativos](#comandos-interativos)
-- [Uso do `/nexus`](#uso-do-nexus)
-- [Uso do `/evoluir`](#uso-do-evoluir)
-- [Arquitetura](#arquitetura)
-- [Resiliência de APIs](#resiliência-de-apis)
-- [Logs e observabilidade](#logs-e-observabilidade)
-- [Configuração avançada](#configuração-avançada)
-- [Segurança](#segurança)
-- [Testes e diagnóstico](#testes-e-diagnóstico)
-- [Estrutura de arquivos](#estrutura-de-arquivos)
-- [Solução de problemas](#solução-de-problemas)
-- [Limitações e responsabilidade](#limitações-e-responsabilidade)
+```text
+pedido do usuário
+      ↓
+/nexus <pedido>
+      ↓
+roteamento local
+      ↓
+Microsoft Edge Flatpak
+      ↓
+Copilot no navegador
+      ↓
+JSON com response | command | python
+      ↓
+validação local
+      ↓
+pergunta: sim / não / auto
+      ↓
+PTY real do Linux
+      ↓
+saída, exit code e validação
+```
 
 ## Recursos
 
-- Roteamento local de pedidos simples sem chamada de API quando possível.
-- Pipeline inteligente com:
-  - interpretação;
-  - planejamento;
-  - decisão de rota;
-  - programação Python ou comando Linux;
-  - execução real;
-  - validação;
-  - conclusão.
-- Integração com a API Gemini via HTTP/REST usando `requests`.
-- Pool de múltiplas API keys com rotação controlada.
-- Failover para falhas de autenticação, rede e servidor.
-- Tratamento de HTTP 429 com cooldown global e respeito ao cabeçalho `Retry-After`.
-- Timeout configurável e backoff exponencial limitado.
-- Controle local de RPM, RPD, tokens e cooldowns.
-- Geração de scripts Python em arquivos reais.
-- Validação por AST e `py_compile` antes da execução.
-- Confirmação para comandos ou scripts potencialmente perigosos.
-- Comando `/evoluir` para modificar somente uma função e salvar uma nova versão.
-- Histórico do readline e autocomplete de comandos/caminhos.
-- Painéis, timestamps, barras de progresso e logs de cada etapa no terminal.
-- API keys ocultas nos logs e redigidas em mensagens de erro.
-- Protocolo compacto reversível NCP/1 entre as fases dos agentes.
+- Microsoft Edge instalado via Flatpak.
+- Microsoft Copilot acessado pela interface web.
+- Nenhuma chave de API.
+- Nenhum endpoint de IA chamado diretamente pelo Python.
+- Leitura da resposta renderizada no navegador.
+- Interpretação de JSON retornado pelo Copilot.
+- Geração de comandos Linux.
+- Confirmação antes da execução.
+- Modos `sim`, `não`, `auto` e `parar`.
+- Execução no PTY real do Linux.
+- Captura de stdout e exit code.
+- Abertura de sites com `xdg-open`.
+- Abertura de aplicativos `.desktop` com `gtk-launch`.
+- Abertura de aplicativos Flatpak com `flatpak run`.
+- Catálogo de aplicativos instalados enviado ao Copilot.
+- Geração e validação de scripts Python.
+- Validação por AST e `py_compile`.
+- Proteção adicional para comandos e scripts potencialmente perigosos.
+- Perfil isolado do Edge Flatpak para evitar conflito com a sessão normal.
 
 ## Requisitos
 
-- Python **3.10 ou superior**;
-- Linux, macOS ou ambiente compatível com `bash` e pseudo-terminal;
-- acesso à internet para utilizar a API Gemini;
-- uma chave da API Gemini;
-- pacotes Python:
-  - `pexpect`;
-  - `requests`.
+- Zorin OS 18.1 Education ou outra distribuição Linux compatível.
+- Python 3.10 ou superior.
+- Microsoft Edge instalado via Flatpak.
+- Flatpak disponível no sistema.
+- Sessão gráfica ativa para abrir o Edge e aplicativos.
+- Internet para acessar o Copilot.
+- Login manual no Copilot na primeira utilização.
 
-O NEXUS utiliza recursos modernos de tipagem do Python, como `dict[str, Any]` e `str | None`. Por isso, recomenda-se Python 3.10+.
+O projeto não exige:
 
-## Instalação
+- Gemini API key;
+- OpenAI API key;
+- `NEXUS_GEMINI_KEY_1`;
+- `requests` para comunicação com IA;
+- `python3 -m playwright install chromium`;
+- Google Chrome instalado;
+- Chromium instalado separadamente.
 
-### 1. Clone o repositório
+### Observação sobre Playwright
 
-```bash
-git clone https://github.com/SEU_USUARIO/SEU_REPOSITORIO.git
-cd SEU_REPOSITORIO
-```
-
-Substitua a URL pelo endereço real do repositório.
-
-### 2. Instale as dependências
-
-Instalação apenas para o usuário atual:
+O Microsoft Edge é baseado no motor Chromium. Por isso, internamente o Playwright usa a API técnica `playwright.chromium` para conectar ao navegador via CDP. Isso **não abre Google Chrome nem o executável Chromium**. O processo iniciado pelo NEXUS é somente:
 
 ```bash
-python3 -m pip install --user pexpect requests
+flatpak run com.microsoft.Edge
 ```
 
-Ou, preferencialmente, crie um ambiente virtual:
+## Instalação no Zorin OS
+
+### 1. Entre no diretório do projeto
+
+```bash
+cd "/home/zorin/Nexus Copilot"
+```
+
+### 2. Crie e ative o ambiente virtual
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+```
+
+### 3. Instale somente as dependências do navegador e do PTY
+
+```bash
 python -m pip install --upgrade pip
-python -m pip install pexpect requests
+python -m pip install pexpect playwright
 ```
 
-### 3. Valide a instalação
+Não execute estes comandos para esta versão:
 
 ```bash
-python3 -m py_compile nexus.py
-python3 nexus.py --self-test
+python -m playwright install chromium
+python -m playwright install chrome
 ```
 
-O diagnóstico deve indicar, entre outros itens:
+O Edge será iniciado pelo Flatpak do sistema.
+
+### 4. Confirme o Edge Flatpak
+
+```bash
+flatpak list --app | grep -i edge
+flatpak info com.microsoft.Edge
+flatpak run com.microsoft.Edge --version
+```
+
+O identificador esperado é:
 
 ```text
-[OK] pexpect
-[OK] requests
-[OK] AST validation
-[OK] py_compile
-[OK] PTY REAL funcionando
-SELF TEST FINALIZADO
+com.microsoft.Edge
 ```
 
-### 4. Torne o arquivo executável, opcionalmente
+Se o comando mostrar outro identificador, defina:
 
 ```bash
-chmod +x nexus.py
+export NEXUS_EDGE_FLATPAK_APP_ID="ID_EXIBIDO_PELO_FLATPAK"
 ```
 
-Depois, ele poderá ser executado diretamente:
+### 5. Permita acesso ao diretório do projeto
+
+Execute uma vez:
 
 ```bash
-./nexus.py
+flatpak override --user \\
+  --filesystem="/home/zorin/Nexus Copilot" \\
+  com.microsoft.Edge
 ```
 
-## Configuração da API Gemini
-
-O NEXUS pode receber as chaves de duas formas.
-
-### Opção A — configuração interativa
-
-Execute:
-
-```bash
-python3 nexus.py --setup
-```
-
-Ou, dentro do programa:
+O perfil padrão do Edge usado pelo NEXUS fica em uma pasta interna permitida pelo Flatpak:
 
 ```text
-/setup
+~/.var/app/com.microsoft.Edge/data/nexus-edge-profile
 ```
 
-Cole uma chave por linha e finalize com uma linha vazia.
+## Instalação do arquivo atualizado
 
-As chaves são armazenadas em:
+Copie o arquivo atualizado para o projeto:
+
+```bash
+cp nexus_edge_copilot.py "/home/zorin/Nexus Copilot/nexus_edge_copilot.py"
+```
+
+Caso o arquivo esteja em outro diretório, substitua o primeiro caminho pelo local correto.
+
+Opcionalmente, crie um nome curto para iniciar o programa:
+
+```bash
+ln -sf nexus_edge_copilot.py nexus.py
+```
+
+## Validação antes da execução
+
+```bash
+cd "/home/zorin/Nexus Copilot"
+source .venv/bin/activate
+python3 -m py_compile nexus_edge_copilot.py
+python3 nexus_edge_copilot.py --version
+```
+
+Resultado esperado na versão atual:
 
 ```text
-~/.config/nexus/config.json
+NEXUS TERMINAL 7.0.1-COPILOT-CONFIRM
 ```
 
-O diretório recebe permissões restritivas e o arquivo de configuração é salvo com permissão `0600`.
-
-### Opção B — variáveis de ambiente
-
-Uma chave:
+Teste o PTY sem chamar o Copilot:
 
 ```bash
-export NEXUS_GEMINI_KEY_1="SUA_CHAVE_GEMINI"
+python3 nexus_edge_copilot.py --self-test
 ```
 
-Múltiplas chaves:
+## Primeira execução
 
 ```bash
-export NEXUS_GEMINI_KEY_1="CHAVE_1"
-export NEXUS_GEMINI_KEY_2="CHAVE_2"
-export NEXUS_GEMINI_KEY_3="CHAVE_3"
+cd "/home/zorin/Nexus Copilot"
+source .venv/bin/activate
+python3 nexus_edge_copilot.py
 ```
 
-Também é possível usar a variável agregada:
+Na primeira chamada:
 
-```bash
-export NEXUS_GEMINI_KEYS="CHAVE_1,CHAVE_2,CHAVE_3"
-```
+1. o NEXUS inicia o Microsoft Edge Flatpak;
+2. abre o perfil isolado do NEXUS;
+3. acessa a URL do Copilot configurada;
+4. o usuário faz login manualmente, se necessário;
+5. o NEXUS envia a instrução pelo campo de mensagem;
+6. o NEXUS lê a resposta renderizada no navegador.
 
-As chaves configuradas pelo arquivo e pelo ambiente são deduplicadas. O NEXUS nunca deve exibir a chave no terminal, em logs ou em mensagens de erro.
-
-> Não coloque chaves reais no Git, no README, em issues ou em commits. Use variáveis de ambiente ou um arquivo local fora do controle de versão.
-
-## Execução
-
-Inicie o terminal inteligente com:
-
-```bash
-python3 nexus.py
-```
-
-Na inicialização, o NEXUS informa:
-
-- versão;
-- modelo configurado;
-- intervalo mínimo entre chamadas;
-- quota local;
-- localização dos scripts gerados;
-- quantidade de chaves disponíveis.
-
-Se nenhuma chave estiver configurada, comandos locais ainda poderão funcionar, mas as tarefas que exigem IA retornarão uma mensagem solicitando `/setup` ou a configuração de uma variável de ambiente.
-
-## Comandos interativos
-
-| Comando | Função |
-|---|---|
-| `/nexus <tarefa>` | Executa o pipeline inteligente normal. |
-| `/nexus --auto <tarefa>` | Ativa modo automático para comandos não perigosos. |
-| `/nexus --fast <tarefa>` | Reduz as etapas de planejamento. |
-| `/nexus --auto --fast <tarefa>` | Combina os dois modos. |
-| `/nexus stop` | Interrompe a tarefa e envia interrupção ao PTY. |
-| `/agente` | Gera um pequeno agente Python a partir de uma personalidade. |
-| `/evoluir` | Evolui uma função específica e salva uma nova versão. |
-| `/status` | Mostra estado do NEXUS, PTY, pool e quotas. |
-| `/quota` | Mostra contadores e limites locais de quota. |
-| `/quota-reset` | Zera os contadores locais de quota. |
-| `/keys` | Mostra a saúde do pool sem exibir as chaves. |
-| `/setup` | Configura as chaves Gemini interativamente. |
-| `/reset-limits` | Remove cooldowns do pool e cooldown global. |
-| `/config` | Mostra a configuração carregada, ocultando o conteúdo das chaves. |
-| `/scripts` | Lista scripts Python gerados. |
-| `/self-test` | Executa diagnóstico local. |
-| `/clear` | Limpa a tela do terminal. |
-| `/help` | Mostra a ajuda incorporada. |
-| `/exit` | Encerra o NEXUS. |
-
-Qualquer entrada que não seja um comando interno é encaminhada ao PTY local.
+Não feche a janela do Edge enquanto uma tarefa estiver sendo processada.
 
 ## Uso do `/nexus`
 
-Exemplos:
+Digite no terminal:
 
 ```text
-NEXUS> /nexus liste os arquivos do diretório atual
+NEXUS> /nexus listar todos os mp3 do meu notebook
 ```
 
-Pedidos simples podem ser roteados localmente para comandos como `pwd` ou `ls`, evitando consumo de API quando a rota local reconhece a solicitação.
-
-Para uma tarefa que exige análise ou programação:
-
-```text
-NEXUS> /nexus analise os arquivos Python deste diretório e gere um relatório
-```
-
-O fluxo exibirá painéis semelhantes a:
-
-```text
-┌── PIPELINE NEXUS ────────────────────────────────────┐
-│ Modo: normal                                         │
-│ Complexidade: alta                                   │
-│ Logs locais no terminal; sem chamadas extras         │
-└─────────────────────────────────────────────────────┘
-[NEXUS PROGRESS] Interpretação       [████······················] 1/7
-```
-
-## Uso do `/agente`
-
-O comando `/agente` gera um pequeno agente Python independente a partir de uma personalidade e de um objetivo informados pelo usuário.
-
-Execute:
-
-```text
-NEXUS> /agente
-```
-
-O NEXUS perguntará:
-
-```text
-Qual a personalidade do agente?
-Nome do agente (Enter = agente_personalizado):
-Qual é o objetivo principal do agente?
-```
-
-O gerador cria um programa Python completo com:
-
-- `SYSTEM_PROMPT` incorporando a personalidade escolhida;
-- protocolo `code_lines`, que reduz falhas de escape JSON durante a geração;
-- segunda tentativa automática quando a resposta JSON vier inválida;
-- loop de conversa no terminal;
-- chamada à API Gemini via `requests`;
-- leitura de chave por `NEXUS_GEMINI_KEY_1`, `GEMINI_API_KEY` ou `NEXUS_GEMINI_KEYS`;
-- timeout configurável por `AGENT_API_TIMEOUT`;
-- tratamento de ausência de chave, timeout, rede e HTTP 4xx/5xx;
-- saída por `/sair`, `/exit` ou Ctrl+C;
-- nenhuma execução de shell;
-- nenhuma chave hardcoded no código gerado.
-
-Exemplo de solicitação:
-
-```text
-Qual a personalidade do agente? Você é um tutor paciente de Python, didático e objetivo.
-Nome do agente: tutor_python
-Qual é o objetivo principal do agente? Ensinar programação Python com exemplos curtos e exercícios práticos.
-```
-
-O arquivo será salvo em:
-
-```text
-~/.config/nexus/generated/agente_tutor_python_YYYYMMDD_HHMMSS_<id>.py
-```
-
-Depois de configurar uma API key, execute o agente com:
-
-```bash
-python3 ~/.config/nexus/generated/agente_tutor_python_*.py
-```
-
-As dependências declaradas pelo agente são apenas informativas. O NEXUS não instala pacotes automaticamente. Revise o arquivo gerado e valide-o antes de uso:
-
-```bash
-python3 -m py_compile ~/.config/nexus/generated/agente_tutor_python_*.py
-```
-
-## Uso do `/evoluir`
-
-O `/evoluir` altera somente uma função ou método, valida o resultado e salva uma nova versão sem sobrescrever o arquivo original.
-
-Execute:
-
-```text
-NEXUS> /evoluir
-```
-
-O NEXUS perguntará:
-
-```text
-Arquivo Python alvo [/caminho/atual/nexus.py]:
-Qual parte/classe? (Enter se estiver no módulo):
-Qual função/método?
-Qual evolução deseja aplicar?
-```
-
-### Exemplo — evoluir um método de uma classe
-
-Arquivo de teste:
-
-```python
-class Calculadora:
-    def somar(self, a, b):
-        return a + b
-```
-
-Respostas:
-
-```text
-Arquivo Python alvo: /caminho/exemplo.py
-Qual parte/classe? (Enter se estiver no módulo): Calculadora
-Qual função/método? somar
-Qual evolução deseja aplicar? Aceite números como strings, converta-os para float antes da soma e preserve o nome e a assinatura do método.
-```
-
-O agente recebe somente a função selecionada. O NEXUS exige que a resposta contenha exatamente uma função com o mesmo nome. Depois:
-
-1. analisa o arquivo com AST;
-2. localiza a função pelo nome e pela classe, se informada;
-3. envia somente o trecho selecionado ao agente de evolução;
-4. rejeita código vazio, inválido ou incompleto;
-5. substitui somente o intervalo da função em memória;
-6. valida o arquivo final com AST;
-7. salva uma nova versão;
-8. executa `py_compile` na nova versão;
-9. preserva o arquivo original.
-
-O arquivo criado segue este padrão:
-
-```text
-exemplo_evolucao_20261002_192500_a1b2c3.py
-```
-
-### Recomendações para pedidos de evolução
-
-Prefira pedidos específicos:
-
-```text
-Evolua somente a função ask da classe GeminiClient para respeitar api_timeout, tratar erros HTTP 429, usar Retry-After e preservar o formato atual de retorno. Não altere outras funções.
-```
-
-Evite pedidos vagos como:
-
-```text
-Evolua o uso de APIs.
-```
-
-Se houver duas funções com o mesmo nome em classes diferentes, informe a classe para desambiguar.
-
-> O `/evoluir` gera e valida a nova versão, mas não executa automaticamente o código evoluído. Revise o diff antes de substituir ou publicar o arquivo.
-
-## Arquitetura
-
-O fluxo principal é:
-
-```text
-PEDIDO
-  ↓
-ROTEADOR LOCAL
-  ↓
-INTERPRETAÇÃO
-  ↓
-PLANEJAMENTO
-  ↓
-DECISÃO
-  ↓
-┌───────────────────────┬──────────────────────┐
-│ comando Linux          │ programa Python      │
-│ confirmação            │ arquivo real        │
-└───────────────────────┴──────────────────────┘
-              ↓
-        AST + py_compile
-              ↓
-       EXECUÇÃO REAL
-              ↓
-        stdout/stderr
-              ↓
-          exit code
-              ↓
-          VALIDAÇÃO
-              ↓
-          CONCLUSÃO
-```
-
-### Agentes internos
-
-- **RESPOSTA ÚNICA**: resolve tarefas simples em uma única decisão.
-- **INTERPRETAÇÃO**: transforma o pedido em especificação.
-- **PLANEJAMENTO**: cria um plano executável.
-- **DECISÃO**: escolhe resposta, comando ou Python.
-- **PROGRAMAÇÃO**: gera programa Python completo.
-- **VALIDAÇÃO**: avalia o resultado real.
-- **CONCLUSÃO**: resume o que foi observado.
-- **EVOLUÇÃO**: produz uma substituição para uma única função.
-
-## Protocolo NCP/1
-
-A versão 6.7 introduz o **NCP/1 (NEXUS Compact Protocol)**, um transporte compacto e reversível para compartilhar estados entre as fases dos agentes. Ele reduz nomes repetidos de campos e mantém fallback para JSON normal quando a economia for insuficiente.
-
-Exemplo conceitual:
-
-```text
-JSON normal: {"user_request":"...","interpretation":...,"terminal":...}
-NCP/1:      NCP/1|{"u":"...","i":...,"t":...}
-```
-
-O NCP/1:
-
-- é um protocolo de transporte, não criptografia;
-- usa aliases versionados como `u`, `i`, `t`, `p` e `d`;
-- recebe instruções curtas de decodificação para o agente;
-- é aplicado ao estado enviado entre as etapas;
-- aceita resposta NCP/1 e a expande antes da validação;
-- registra tamanho original, tamanho compacto e percentual de economia;
-- usa JSON normal automaticamente quando a economia fica abaixo do mínimo;
-- não remove os logs legíveis nem a auditoria operacional.
-
-Configuração padrão:
+O Copilot deve interpretar o pedido e devolver um JSON semelhante a:
 
 ```json
 {
-  "compact_protocol_enabled": true,
-  "compact_protocol_version": "NCP/1",
-  "compact_min_savings_percent": 15,
-  "compact_fallback_enabled": true,
-  "compact_show_preview": false
+  "execute": true,
+  "mode": "command",
+  "command": "find /home/zorin -type f -iname \"*.mp3\"",
+  "response": "",
+  "reason": "Listar todos os arquivos MP3."
 }
 ```
 
-Para desativar temporariamente:
-
-```json
-{
-  "compact_protocol_enabled": false
-}
-```
-
-A redução varia conforme o tamanho e a repetição do estado. O NCP/1 não garante economia em mensagens curtas; nesses casos o fallback evita aumentar o consumo.
-
-## Resiliência de APIs
-
-A versão atual inclui uma camada específica para chamadas Gemini.
-
-### Timeout
-
-O tempo máximo de uma chamada é controlado por:
-
-```json
-"api_timeout": 90
-```
-
-O timeout impede que uma requisição fique bloqueada indefinidamente.
-
-### Retry e backoff
-
-Falhas temporárias de rede, timeout e respostas HTTP 5xx podem ser repetidas de acordo com:
-
-```json
-"max_retries": 1,
-"api_backoff_base": 2,
-"api_backoff_max": 30
-```
-
-O backoff é exponencial, mas limitado pelo valor máximo configurado.
-
-### HTTP 429
-
-Quando o provedor retorna HTTP 429, o NEXUS:
-
-- lê `Retry-After`, quando presente;
-- aplica cooldown global;
-- registra o evento na quota local;
-- não faz rotação cega pelas demais chaves;
-- informa a espera no terminal;
-- evita tratar várias chaves do mesmo projeto como solução para uma quota compartilhada.
-
-### HTTP 401 e 403
-
-Erros de autenticação ou autorização marcam a chave como problemática e permitem failover controlado para outra chave disponível, respeitando `max_key_failover`.
-
-### Quota local
-
-Os controles locais são mecanismos conservadores de proteção operacional. Eles **não representam a quota oficial do Google**.
-
-Configurações relevantes:
-
-```json
-"quota_soft_rpm": 6,
-"quota_soft_tpm": 0,
-"quota_soft_rpd": 0,
-"quota_global_cooldown": 60,
-"quota_persist": true
-```
-
-## Logs e observabilidade
-
-A observabilidade é local e não cria chamadas adicionais à API.
-
-O terminal exibe:
-
-- timestamp de cada evento;
-- etapa atual;
-- progresso do pipeline;
-- agente e chamada atual;
-- modelo e tamanho aproximado do payload;
-- timeout configurado;
-- número da chave selecionada, nunca o valor da chave;
-- retry, failover e backoff;
-- status HTTP e tempo de resposta;
-- tempo total da API;
-- execução no PTY;
-- validação AST/compilação;
-- resultado final.
-
-Os logs não adicionam espera artificial. As únicas esperas exibidas são as já necessárias para:
-
-- `api_min_interval`;
-- retry/backoff;
-- cooldown de quota;
-- timeout da chamada;
-- cooldown de execução local, quando configurado.
-
-## Configuração avançada
-
-A configuração padrão fica definida em `DEFAULT_CONFIG` e pode ser complementada ou substituída por:
+O NEXUS então mostra:
 
 ```text
-~/.config/nexus/config.json
+Executar:
+  find /home/zorin -type f -iname "*.mp3"
+[s]im [n]ão [a]uto [x]parar:
 ```
 
-Exemplo de configuração:
+### Opções de confirmação
 
-```json
-{
-  "model": "gemini-3.6-flash",
-  "temperature": 0.1,
-  "max_output_tokens": 3000,
-  "programming_max_output_tokens": 10000,
-  "api_timeout": 90,
-  "api_backoff_base": 2,
-  "api_backoff_max": 30,
-  "terminal_timeout": 300,
-  "generated_script_timeout": 300,
-  "api_min_interval": 8,
-  "max_key_failover": 5,
-  "max_retries": 1,
-  "quota_soft_rpm": 6,
-  "quota_soft_tpm": 0,
-  "quota_soft_rpd": 0,
-  "quota_global_cooldown": 60,
-  "quota_persist": true,
-  "dangerous_always_confirm": true,
-  "max_output_chars": 8000,
-  "request_max_chars": 20000,
-  "max_generated_script_chars": 200000,
-  "keep_generated_scripts": true,
-  "terminal_logs": true,
-  "compact_protocol_enabled": true,
-  "compact_protocol_version": "NCP/1",
-  "compact_min_savings_percent": 15,
-  "compact_fallback_enabled": true,
-  "compact_show_preview": false
-}
-```
+| Entrada | Comportamento |
+|---|---|
+| `s` ou `sim` | Executa o comando atual. |
+| `n` ou `não` | Cancela o comando atual. |
+| `a` ou `auto` | Ativa o modo automático para comandos não perigosos. |
+| `x` ou `parar` | Interrompe a tarefa e o PTY. |
 
-Para visualizar a configuração carregada:
+O campo `execute` do Copilot não substitui essa confirmação local.
+
+## Exemplos de comandos
+
+### Comando simples
 
 ```text
-NEXUS> /config
+/nexus mostrar meu diretório
+/nexus listar os arquivos
+/nexus verificar a memória
+/nexus mostrar o espaço em disco
 ```
 
-A lista de chaves é indicada como configurada ou vazia, sem exibir os valores.
-
-## Segurança
-
-O NEXUS adota as seguintes medidas:
-
-- não exibe API keys no terminal;
-- redige chaves em mensagens de erro;
-- salva configuração com permissões restritivas;
-- usa escrita atômica para arquivos persistentes;
-- sanitiza nomes de scripts gerados;
-- valida código Python com AST e `py_compile`;
-- detecta placeholders e código incompleto;
-- pede confirmação para comandos perigosos;
-- pede confirmação para scripts com operações sensíveis;
-- não instala automaticamente dependências declaradas por um script gerado;
-- preserva o arquivo original durante `/evoluir`.
-
-### Comandos perigosos
-
-Comandos como remoção destrutiva, formatação de dispositivos, reboot, shutdown e alterações amplas de permissões são reconhecidos e exigem confirmação adicional quando aplicável.
-
-Ainda assim, nenhuma camada automática substitui a revisão humana. Leia comandos, scripts e diffs antes de executá-los em ambientes importantes.
-
-## Testes e diagnóstico
-
-### Compilação
-
-```bash
-python3 -m py_compile nexus.py
-```
-
-### Autoteste
-
-```bash
-python3 nexus.py --self-test
-```
-
-O autoteste verifica:
-
-- versão do Python;
-- `pexpect`;
-- `requests`;
-- `readline`;
-- configuração;
-- quota manager;
-- comandos básicos do sistema;
-- validação AST;
-- `py_compile`;
-- inicialização do PTY.
-
-### Verificação de versão
-
-```bash
-python3 nexus.py --version
-```
-
-### Teste manual de `/evoluir`
-
-Crie um arquivo pequeno:
-
-```bash
-cat > exemplo_evoluir.py <<'PY'
-class Calculadora:
-    def somar(self, a, b):
-        return a + b
-
-if __name__ == "__main__":
-    print(Calculadora().somar(2, 3))
-PY
-```
-
-Teste o original:
-
-```bash
-python3 exemplo_evoluir.py
-```
-
-Use `/evoluir` no NEXUS, aponte para `exemplo_evoluir.py`, informe `Calculadora`, `somar` e uma evolução específica. Depois confira:
-
-```bash
-ls -lah exemplo_evoluir*
-python3 -m py_compile exemplo_evolucao_*.py
-```
-
-O arquivo original deve permanecer no lugar.
-
-## Estrutura de arquivos
+### Procurar arquivos MP3
 
 ```text
-.
-├── nexus.py                 # aplicação principal
-├── README.md                # documentação do projeto
-├── .venv/                   # opcional; ambiente virtual local
-└── ...                      # arquivos do repositório
+/nexus listar todos os mp3 do meu notebook
 ```
 
-Arquivos gerados em tempo de execução:
+O resultado pode ser um comando como:
+
+```bash
+find /home/zorin -type f -iname "*.mp3"
+```
+
+### Abrir um site
 
 ```text
-~/.config/nexus/
-├── config.json              # configuração e, se escolhida, chaves
-├── history                  # histórico readline
-├── quota_state.json         # contadores locais persistentes
-└── generated/               # scripts gerados pelo pipeline
+/nexus abrir https://www.google.com
 ```
 
-O `/evoluir` salva a nova versão no diretório do arquivo alvo, seguindo o padrão `*_evolucao_YYYYMMDD_HHMMSS_<id>.py`.
-
-## Solução de problemas
-
-### `Dependência ausente: pexpect`
-
-Instale as dependências:
+O comando esperado é semelhante a:
 
 ```bash
-python3 -m pip install --user pexpect requests
+xdg-open 'https://www.google.com'
 ```
 
-Se estiver usando ambiente virtual, ative-o antes.
+### Abrir um programa instalado
 
-### `Nenhuma API key configurada`
+```text
+/nexus abrir o Firefox
+/nexus abrir o LibreOffice
+/nexus abrir o VLC
+```
 
-Configure uma chave:
+O Copilot escolhe um identificador do catálogo disponível, por exemplo:
 
 ```bash
-python3 nexus.py --setup
+gtk-launch firefox.desktop
 ```
 
 ou:
 
 ```bash
-export NEXUS_GEMINI_KEY_1="SUA_CHAVE_GEMINI"
+flatpak run org.videolan.VLC
 ```
 
-### `Todas as chaves disponíveis estão em cooldown`
-
-Verifique:
+### Listar aplicativos sem abrir nada
 
 ```text
-NEXUS> /keys
-NEXUS> /quota
-NEXUS> /status
+/nexus listar os aplicativos instalados
 ```
 
-O cooldown pode ser removido com:
+Esse pedido deve gerar uma resposta ou um comando de listagem, sem iniciar todos os programas.
 
-```text
-NEXUS> /reset-limits
+> Não peça para abrir todos os programas instalados ao mesmo tempo sem revisar o comando. Isso pode abrir dezenas de janelas e sobrecarregar a sessão gráfica.
+
+## Formato de resposta do Copilot
+
+O agente principal deve retornar somente JSON válido:
+
+```json
+{
+  "execute": true,
+  "mode": "python|command|response",
+  "command": "",
+  "response": "",
+  "reason": ""
+}
 ```
 
-Esse comando remove cooldowns locais, mas não remove limites impostos pelo provedor.
+### `mode: response`
 
-### HTTP 429
+Usado para responder sem executar comandos.
 
-HTTP 429 indica limitação de quota ou frequência. Aguarde o cooldown informado, revise `api_min_interval`, `quota_soft_rpm` e a quota oficial do projeto no Google AI Studio. Não presuma que adicionar mais chaves resolverá uma quota global compartilhada.
+### `mode: command`
 
-### `Função não encontrada` no `/evoluir`
+Usado para um único comando Linux. O NEXUS mostra o comando, pede confirmação e executa no PTY.
 
-Confira:
+### `mode: python`
 
-- o caminho absoluto do arquivo;
-- o nome exato da função;
-- a classe correta, quando for método;
-- se a função é realmente `def` ou `async def` no escopo esperado.
+Usado para múltiplas etapas, loops, processamento de arquivos ou automação. O código é salvo, validado por AST e `py_compile`, e depois passa pela confirmação aplicável antes da execução.
 
-### Função ambígua no `/evoluir`
-
-Informe o nome da classe em **Qual parte/classe?**. Isso evita alterar a função errada.
-
-### Falha de AST ou `py_compile`
-
-A nova versão não deve ser usada. Revise a mensagem, mantenha o arquivo original e ajuste o pedido de evolução para ser mais específico.
-
-## Limitações e responsabilidade
-
-- O NEXUS depende da disponibilidade, autenticação, modelo e quotas da API Gemini.
-- As quotas locais são estimativas de proteção e não substituem os limites oficiais do provedor.
-- O modo automático não elimina todos os riscos; comandos e scripts devem ser revisados.
-- Código gerado por IA deve ser auditado antes de uso em produção.
-- O `/evoluir` modifica uma função por vez e não garante correção semântica completa do programa.
-- O projeto não instala dependências automaticamente para scripts gerados.
-- O arquivo original deve ser versionado com Git antes de evoluções importantes.
-
-## Fluxo recomendado para contribuição
-
-Antes de enviar alterações ao GitHub:
+## Configuração opcional
 
 ```bash
-python3 -m py_compile nexus.py
-python3 nexus.py --self-test
-git diff --check
-git status
+export NEXUS_PROJECT_DIR="/home/zorin/Nexus Copilot"
+export NEXUS_EDGE_USE_FLATPAK=1
+export NEXUS_EDGE_FLATPAK_APP_ID="com.microsoft.Edge"
+export NEXUS_EDGE_FLATPAK_PROFILE="$HOME/.var/app/com.microsoft.Edge/data/nexus-edge-profile"
+export NEXUS_EDGE_HEADLESS=0
+export NEXUS_BROWSER_TIMEOUT=120000
 ```
 
-Depois, revise especialmente:
+A URL do Copilot pode ser definida pela variável abaixo:
 
-- alterações no cliente de API;
-- logs e possíveis vazamentos de segredo;
-- tratamento de timeout, 429 e 5xx;
-- comportamento do `/evoluir`;
-- permissões dos arquivos gerados;
-- compatibilidade com o Python suportado.
+```bash
+export NEXUS_COPILOT_URL="https://copilot.com/chat?fromcode=cmm9tzigufu&sessionId=4b39bf2e-400d-6ca6-2a7c-dba341494dab&hasLW=true&es=SSR&redirfrom=userTypeCookie&redirfrom=cosmicRingCookie"
+```
 
-## Licença
+O `sessionId` presente nessa URL pode expirar ou ser alterado pelo Copilot. Se isso acontecer, atualize a URL configurada.
 
-Nenhum arquivo de licença foi presumido nesta documentação. Defina e adicione uma licença explícita ao repositório antes de publicar o projeto, conforme a intenção do mantenedor.
+## Segurança
+
+O NEXUS executa comandos reais no sistema. Portanto:
+
+- leia sempre o comando antes de escolher `sim`;
+- use `não` quando o comando não corresponder ao pedido;
+- use `auto` apenas para tarefas repetitivas e de baixo risco;
+- não aceite automaticamente comandos com `sudo`, remoção, formatação, desligamento ou alterações amplas;
+- não coloque senhas, tokens ou chaves no prompt;
+- não coloque credenciais em comandos que serão enviados ao Copilot;
+- não execute scripts gerados sem revisar o caminho e a finalidade;
+- mantenha `dangerous_always_confirm` habilitado.
+
+A integração via navegador elimina a API key, mas **não elimina os riscos de executar comandos no sistema**.
+
+## Diagnóstico
+
+### Edge não abre
+
+```bash
+flatpak info com.microsoft.Edge
+flatpak run com.microsoft.Edge --version
+```
+
+Se o erro mencionar o perfil, remova somente o perfil isolado do NEXUS com o programa fechado:
+
+```bash
+rm -rf "$HOME/.var/app/com.microsoft.Edge/data/nexus-edge-profile"
+```
+
+Na próxima execução, o perfil será recriado. Não remova o perfil pessoal normal do Edge.
+
+### Copilot abre, mas não responde
+
+- confirme que o login foi concluído;
+- verifique se a página aberta é `copilot.com/chat`;
+- não feche a janela do Edge;
+- aguarde o carregamento da caixa `Message Copilot`;
+- confirme se a URL de `NEXUS_COPILOT_URL` ainda está válida.
+
+### Copilot responde, mas o terminal não lê
+
+A versão 7.0.1 procura imediatamente o JSON renderizado e não depende da página inteira ficar estável. Verifique se o arquivo atualizado foi copiado:
+
+```bash
+python3 nexus_edge_copilot.py --version
+```
+
+Use a versão:
+
+```text
+7.0.1-COPILOT-CONFIRM
+```
+
+### Erro `name 'as_bool' is not defined`
+
+Esse erro pertence a uma versão anterior. Substitua o arquivo pelo `nexus_edge_copilot.py` atualizado e compile novamente:
+
+```bash
+cp /caminho/da/versao/nexus_edge_copilot.py .
+python3 -m py_compile nexus_edge_copilot.py
+```
+
+### Comando incorreto
+
+Digite `n` na confirmação, copie o JSON exibido no Copilot e revise os campos `mode` e `command`. O NEXUS não deve executar um comando que não corresponda ao pedido.
+
+## Estrutura recomendada
+
+```text
+/home/zorin/Nexus Copilot/
+├── .venv/
+├── nexus_edge_copilot.py
+├── nexus.py -> nexus_edge_copilot.py       # opcional
+├── README.md
+└── .nexus/
+    └── generated/
+```
+
+Perfil do Edge:
+
+```text
+/home/zorin/.var/app/com.microsoft.Edge/data/nexus-edge-profile
+```
+
+## Licença e responsabilidade
+
+Consulte a licença e os termos do repositório original antes de redistribuir alterações.
+
+O NEXUS é uma ferramenta de automação local. O usuário é responsável por revisar comandos, scripts, URLs abertas e alterações realizadas no sistema.
+
+## Fontes consultadas
+
+- [Repositório original no GitHub](https://github.com/juliocamposmachado/nexus-terminal)
+- [README original](https://github.com/juliocamposmachado/nexus-terminal/blob/index.html/README.md)
+- [Código original `nexus.py`](https://github.com/juliocamposmachado/nexus-terminal/blob/index.html/nexus.py)
+- [Microsoft: Copilot no Edge](https://support.microsoft.com/en-us/microsoft-copilot/getting-started-with-copilot-in-microsoft-edge)
