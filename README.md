@@ -1,5 +1,8 @@
 # NEXUS TERMINAL — Copilot no Microsoft Edge, sem API
 
+<img width="1367" height="718" alt="image" src="https://github.com/user-attachments/assets/34833e54-cc39-4d3a-9a7c-3fc8418355b5" />
+
+
 Agente Linux em Python com execução real no terminal, usando o **Microsoft Copilot através do navegador Microsoft Edge**. Esta versão não usa Gemini API, OpenAI API, API key, `requests` para IA ou endpoint HTTP de modelo.
 
 > **Status desta documentação:** preparada para a versão local `7.0.1-COPILOT-CONFIRM`, com correções de captura da resposta JSON e confirmação `sim / não / auto`.
